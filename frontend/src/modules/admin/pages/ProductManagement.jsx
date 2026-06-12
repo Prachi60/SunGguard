@@ -144,7 +144,7 @@ const ProductManagement = () => {
             return toast.error('Only product editing is allowed for admins');
         }
 
-        if (!formData.name || !formData.price || !formData.stock || !formData.header || !formData.categoryId || !formData.subcategoryId) {
+        if (!formData.name || !formData.price || !formData.stock || !formData.header || !formData.categoryId) {
             return toast.error('Please fill all required fields, including categories');
         }
 
@@ -173,6 +173,11 @@ const ProductManagement = () => {
             if (formData.mainImageFile) {
                 data.append('mainImage', formData.mainImageFile);
             }
+            const existingGalleryUrls = (formData.galleryImages || []).filter(
+                (img) => img && !img.startsWith('data:') && !img.startsWith('blob:')
+            );
+            data.append('galleryImages', JSON.stringify(existingGalleryUrls));
+
             if (formData.galleryFiles && formData.galleryFiles.length > 0) {
                 formData.galleryFiles.forEach((file) => data.append('galleryImages', file));
             }
@@ -281,6 +286,29 @@ const ProductManagement = () => {
                 galleryImages: [...(formData.galleryImages || []), ...results.map((item) => item.url)],
                 galleryFiles: [...(formData.galleryFiles || []), ...results.map((item) => item.file)]
             });
+        });
+    };
+
+    const handleRemoveGalleryImage = (indexToRemove) => {
+        setFormData((prev) => {
+            const targetImage = prev.galleryImages[indexToRemove];
+            let updatedFiles = prev.galleryFiles || [];
+            if (targetImage && (targetImage.startsWith("data:") || targetImage.startsWith("blob:"))) {
+                let dataUrlCountBefore = 0;
+                for (let i = 0; i < indexToRemove; i++) {
+                    const img = prev.galleryImages[i];
+                    if (img && (img.startsWith("data:") || img.startsWith("blob:"))) {
+                        dataUrlCountBefore++;
+                    }
+                }
+                updatedFiles = updatedFiles.filter((_, idx) => idx !== dataUrlCountBefore);
+            }
+            const updatedImages = prev.galleryImages.filter((_, idx) => idx !== indexToRemove);
+            return {
+                ...prev,
+                galleryImages: updatedImages,
+                galleryFiles: updatedFiles,
+            };
         });
     };
 
@@ -846,7 +874,7 @@ const ProductManagement = () => {
                                                 </div>
                                             </div>
                                             <div className="space-y-1.5 flex flex-col">
-                                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest ml-1">Sub-Category <span className="text-rose-500">*</span></label>
+                                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest ml-1">Sub-Category</label>
                                                 <select
                                                     value={formData.subcategoryId}
                                                     onChange={(e) => setFormData({ ...formData, subcategoryId: e.target.value })}
@@ -1009,10 +1037,10 @@ const ProductManagement = () => {
                                                                 <img src={image} alt={`Gallery ${index + 1}`} className="h-full w-full object-cover" />
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => setFormData({
-                                                                        ...formData,
-                                                                        galleryImages: formData.galleryImages.filter((_, i) => i !== index)
-                                                                    })}
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleRemoveGalleryImage(index);
+                                                                    }}
                                                                     className="absolute top-2 right-2 p-2 rounded-full bg-white/90 text-rose-500 shadow-md opacity-0 group-hover:opacity-100 transition-all"
                                                                 >
                                                                     <HiOutlineTrash className="h-4 w-4" />

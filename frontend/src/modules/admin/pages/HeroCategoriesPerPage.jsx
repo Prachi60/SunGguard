@@ -311,7 +311,7 @@ export default function HeroCategoriesPerPage() {
               type="button"
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-2 rounded-xl text-sm font-bold bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              className="px-6 py-2 rounded-xl text-sm font-bold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save"}
             </button>

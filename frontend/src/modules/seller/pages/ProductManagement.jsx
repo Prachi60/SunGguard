@@ -309,7 +309,7 @@ const ProductManagement = () => {
 
   const handleSave = async () => {
     try {
-      if (!formData.name || !formData.price || !formData.stock || !formData.header || !formData.category || !formData.subcategory) {
+      if (!formData.name || !formData.price || !formData.stock || !formData.header || !formData.category) {
         toast.error("Please fill all required fields, including categories");
         return;
       }
@@ -334,6 +334,11 @@ const ProductManagement = () => {
       if (formData.mainImageFile) {
         data.append("mainImage", formData.mainImageFile);
       }
+      const existingGalleryUrls = (formData.galleryImages || []).filter(
+        (img) => img && !img.startsWith("data:") && !img.startsWith("blob:")
+      );
+      data.append("galleryImages", JSON.stringify(existingGalleryUrls));
+
       if (formData.galleryFiles && formData.galleryFiles.length > 0) {
         formData.galleryFiles.forEach((file) => data.append("galleryImages", file));
       }
@@ -381,6 +386,29 @@ const ProductManagement = () => {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const handleRemoveGalleryImage = (indexToRemove) => {
+    setFormData((prev) => {
+      const targetImage = prev.galleryImages[indexToRemove];
+      let updatedFiles = prev.galleryFiles || [];
+      if (targetImage && (targetImage.startsWith("data:") || targetImage.startsWith("blob:"))) {
+        let dataUrlCountBefore = 0;
+        for (let i = 0; i < indexToRemove; i++) {
+          const img = prev.galleryImages[i];
+          if (img && (img.startsWith("data:") || img.startsWith("blob:"))) {
+            dataUrlCountBefore++;
+          }
+        }
+        updatedFiles = updatedFiles.filter((_, idx) => idx !== dataUrlCountBefore);
+      }
+      const updatedImages = prev.galleryImages.filter((_, idx) => idx !== indexToRemove);
+      return {
+        ...prev,
+        galleryImages: updatedImages,
+        galleryFiles: updatedFiles,
+      };
+    });
   };
 
   const exportProducts = () => {
@@ -1124,7 +1152,7 @@ const ProductManagement = () => {
                       </div>
                       <div className="space-y-1.5 flex flex-col">
                         <label className="text-[10px] sm:text-xs font-bold text-slate-600 uppercase tracking-widest ml-1">
-                          Sub-Category <span className="text-rose-500">*</span>
+                          Sub-Category
                         </label>
                         <select
                           value={formData.subcategory}
@@ -1180,8 +1208,18 @@ const ProductManagement = () => {
                           {(formData.galleryImages || []).slice(0, 4).map((img, idx) => (
                             <div
                               key={`${img}-${idx}`}
-                              className="aspect-square rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 overflow-hidden relative">
+                              className="aspect-square rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden relative group shadow-sm">
                               <img src={img} alt={`Gallery ${idx + 1}`} className="w-full h-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveGalleryImage(idx);
+                                }}
+                                className="absolute top-2 right-2 p-2 rounded-full bg-white/90 text-rose-500 shadow-md opacity-0 group-hover:opacity-100 transition-all hover:bg-white hover:text-rose-600 z-20"
+                              >
+                                <HiOutlineTrash className="h-4 w-4" />
+                              </button>
                             </div>
                           ))}
                           {Array.from({ length: Math.max(0, 4 - (formData.galleryImages || []).length) }).map((_, idx) => (

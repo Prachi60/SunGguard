@@ -586,6 +586,15 @@ export const createProduct = async (req, res) => {
     const productData = { ...req.body };
     stripRestrictedModerationFields(productData);
 
+    if (
+      productData.subcategoryId === "" ||
+      productData.subcategoryId === "null" ||
+      productData.subcategoryId === "undefined" ||
+      !productData.subcategoryId
+    ) {
+      productData.subcategoryId = null;
+    }
+
     if (role === "admin") {
       if (!productData.sellerId) {
         return handleResponse(res, 400, "sellerId is required for admin-created products");
@@ -621,7 +630,8 @@ export const createProduct = async (req, res) => {
         }
       }
       if (galleryUrls.length > 0) {
-        productData.galleryImages = galleryUrls;
+        const existingGallery = parseImageList(productData.galleryImages);
+        productData.galleryImages = [...existingGallery, ...galleryUrls];
       }
     }
 
@@ -754,6 +764,15 @@ export const updateProduct = async (req, res) => {
       delete productData.sellerId;
     }
 
+    if (
+      productData.subcategoryId === "" ||
+      productData.subcategoryId === "null" ||
+      productData.subcategoryId === "undefined" ||
+      !productData.subcategoryId
+    ) {
+      productData.subcategoryId = null;
+    }
+
     // Handle multipart files (mainImage and galleryImages)
     const files = req.files || [];
     if (files.length > 0) {
@@ -781,7 +800,8 @@ export const updateProduct = async (req, res) => {
         }
       }
       if (galleryUrls.length > 0) {
-        productData.galleryImages = galleryUrls;
+        const existingGallery = parseImageList(productData.galleryImages);
+        productData.galleryImages = [...existingGallery, ...galleryUrls];
       }
     }
 

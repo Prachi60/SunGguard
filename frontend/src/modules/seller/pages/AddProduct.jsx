@@ -122,9 +122,9 @@ const AddProduct = () => {
       return;
     }
 
-    // Validate all three category levels are selected
-    if (!formData.header || !formData.category || !formData.subcategory) {
-      toast.error("Please select all three category levels: Main Group, Specific Category, and Sub-Category");
+    // Validate required category levels are selected
+    if (!formData.header || !formData.category) {
+      toast.error("Please select Main Group and Specific Category");
       return;
     }
 
@@ -165,6 +165,11 @@ const AddProduct = () => {
         data.append("mainImage", formData.mainImageFile);
       }
 
+      const existingGalleryUrls = (formData.galleryImages || []).filter(
+        (img) => img && !img.startsWith("data:") && !img.startsWith("blob:")
+      );
+      data.append("galleryImages", JSON.stringify(existingGalleryUrls));
+
       if (formData.galleryFiles && formData.galleryFiles.length > 0) {
         formData.galleryFiles.forEach(file => {
           data.append("galleryImages", file);
@@ -187,6 +192,29 @@ const AddProduct = () => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleRemoveGalleryImage = (indexToRemove) => {
+    setFormData((prev) => {
+      const targetImage = prev.galleryImages[indexToRemove];
+      let updatedFiles = prev.galleryFiles || [];
+      if (targetImage && (targetImage.startsWith("data:") || targetImage.startsWith("blob:"))) {
+        let dataUrlCountBefore = 0;
+        for (let i = 0; i < indexToRemove; i++) {
+          const img = prev.galleryImages[i];
+          if (img && (img.startsWith("data:") || img.startsWith("blob:"))) {
+            dataUrlCountBefore++;
+          }
+        }
+        updatedFiles = updatedFiles.filter((_, idx) => idx !== dataUrlCountBefore);
+      }
+      const updatedImages = prev.galleryImages.filter((_, idx) => idx !== indexToRemove);
+      return {
+        ...prev,
+        galleryImages: updatedImages,
+        galleryFiles: updatedFiles,
+      };
+    });
   };
 
   const handleImageUpload = (e, type) => {
@@ -565,7 +593,7 @@ const AddProduct = () => {
               <div className="grid grid-cols-1 gap-6">
                 <div className="space-y-1.5 flex flex-col">
                   <label className="text-[10px] sm:text-xs font-bold text-slate-600 uppercase tracking-widest ml-1">
-                    Sub-Category <span className="text-rose-500">*</span>
+                    Sub-Category
                   </label>
                   <select
                     value={formData.subcategory}
@@ -643,10 +671,22 @@ const AddProduct = () => {
                       key={i}
                       className="aspect-square rounded-md border-2 border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center group hover:border-primary hover:bg-primary/5 transition-all cursor-pointer relative overflow-hidden">
                       {formData.galleryImages[i - 1] ? (
-                        <img
-                          src={formData.galleryImages[i - 1]}
-                          className="w-full h-full object-cover"
-                        />
+                        <div className="w-full h-full relative group">
+                          <img
+                            src={formData.galleryImages[i - 1]}
+                            className="w-full h-full object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveGalleryImage(i - 1);
+                            }}
+                            className="absolute top-1.5 right-1.5 p-1.5 rounded-full bg-white/90 text-rose-500 shadow-md opacity-0 group-hover:opacity-100 transition-all hover:bg-white hover:text-rose-600 z-20"
+                          >
+                            <HiOutlineTrash className="h-4 w-4" />
+                          </button>
+                        </div>
                       ) : (
                         <>
                           <input

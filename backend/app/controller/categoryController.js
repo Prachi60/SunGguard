@@ -59,19 +59,31 @@ export const getCategories = async (req, res) => {
       const categories = await getOrSet(
         cacheKey,
         async () => {
-          const selectFields = "name slug image iconId type parentId headerColor headerFontColor headerIconColor";
-          return Category.find({ type: "header" })
+          // Fetch ALL categories in a single query (fast — no populate N+1)
+          const selectFields = "name slug image iconId type parentId status headerColor headerFontColor headerIconColor";
+          const allCats = await Category.find({})
             .select(selectFields)
-            .populate({
-              path: "children",
-              select: selectFields,
-              populate: {
-                path: "children",
-                select: selectFields,
-              },
-            })
             .sort({ name: 1, _id: 1 })
             .lean();
+
+          // Build tree in-memory: O(n)
+          const map = {};
+          for (const cat of allCats) {
+            map[String(cat._id)] = { ...cat, children: [] };
+          }
+          const roots = [];
+          for (const cat of allCats) {
+            const node = map[String(cat._id)];
+            if (cat.type === "header" || !cat.parentId) {
+              roots.push(node);
+            } else {
+              const parent = map[String(cat.parentId)];
+              if (parent) {
+                parent.children.push(node);
+              }
+            }
+          }
+          return roots;
         },
         getTTL("categories"),
       );

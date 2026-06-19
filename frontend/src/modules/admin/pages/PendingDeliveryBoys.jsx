@@ -191,7 +191,9 @@ return (
                             <th className="ds-table-header-cell px-4">Applicant Details</th>
                             <th className="ds-table-header-cell px-4">Operational Intel</th>
                             <th className="ds-table-header-cell px-4">Submission Status</th>
-                            <th className="ds-table-header-cell px-4 text-right">Action</th>
+                            <th className="ds-table-header-cell px-4">
+                                <div className="flex justify-center">Action</div>
+                            </th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
@@ -252,13 +254,15 @@ return (
                                             </div>
                                         </div>
                                     </td>
-                                    <td className="px-8 py-6 text-right">
-                                        <button
-                                            onClick={() => setViewingRider(rider)}
-                                            className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-bold shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all active:scale-95"
-                                        >
-                                            VIEW APPLICATION
-                                        </button>
+                                    <td className="px-8 py-6">
+                                        <div className="flex justify-center">
+                                            <button
+                                                onClick={() => setViewingRider(rider)}
+                                                className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-bold shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all active:scale-95"
+                                            >
+                                                VIEW APPLICATION
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))
@@ -326,7 +330,7 @@ return (
                         <div className="flex-1 p-5 lg:p-14 bg-white">
                             <div className="flex justify-between items-start mb-10">
                                 <div>
-                                    <h2 className="ds-h1">Vetting Protocol</h2>
+                                    <h2 className="ds-h1">Verification Protocol</h2>
                                     <p className="ds-description mt-1">Check submitted legal documents for platform entry.</p>
                                 </div>
                                 <button onClick={() => setViewingRider(null)} className="p-3 hover:bg-slate-50 rounded-2xl transition-all">
@@ -393,7 +397,7 @@ return (
                                     {isProcessing ? (
                                         <>
                                             <div className="h-4 w-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                                            Processing Vetting...
+                                            Processing Verification...
                                         </>
                                     ) : (
                                         <>

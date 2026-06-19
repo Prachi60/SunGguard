@@ -64,6 +64,16 @@ const extractAddressDetails = (result) => {
   };
 };
 
+const parseLatLng = (loc) => {
+  if (!loc) return null;
+  const lat = Number(loc.lat);
+  const lng = Number(loc.lng);
+  if (isNaN(lat) || isNaN(lng) || loc.lat === null || loc.lng === null) {
+    return null;
+  }
+  return { lat, lng };
+};
+
 const MapPicker = ({
   isOpen,
   onClose,
@@ -72,9 +82,15 @@ const MapPicker = ({
   initialRadius = 5,
   maxRadius = 20,
   preferCurrentLocationOnOpen = false,
+  title = "Select Shop Location",
+  searchPlaceholder = "Search for your shop area...",
+  showRadius = true,
+  radiusLabel = "Service Radius (km)",
+  descriptionText = "Customers within this radius from your shop will be able to see and order from you.",
 }) => {
-  const [center, setCenter] = useState(initialLocation || defaultCenter);
-  const [marker, setMarker] = useState(initialLocation);
+  const initialCoords = parseLatLng(initialLocation);
+  const [center, setCenter] = useState(initialCoords || defaultCenter);
+  const [marker, setMarker] = useState(initialCoords);
   const [radius, setRadius] = useState(initialRadius);
   const [address, setAddress] = useState("");
   const [isGeocoding, setIsGeocoding] = useState(false);
@@ -101,8 +117,11 @@ const MapPicker = ({
 
   useEffect(() => {
     if (initialLocation) {
-      setCenter(initialLocation);
-      setMarker(initialLocation);
+      const coords = parseLatLng(initialLocation);
+      if (coords) {
+        setCenter(coords);
+        setMarker(coords);
+      }
     }
   }, [initialLocation]);
 
@@ -116,9 +135,10 @@ const MapPicker = ({
       return;
     }
 
-    if (initialLocation) {
-      setCenter(initialLocation);
-      setMarker(initialLocation);
+    const coords = parseLatLng(initialLocation);
+    if (coords) {
+      setCenter(coords);
+      setMarker(coords);
     } else {
       setCenter(defaultCenter);
       setMarker(null);
@@ -176,8 +196,9 @@ const MapPicker = ({
         },
         () => {
           if (fallbackToInitial && initialLocation) {
-            setCenter(initialLocation);
-            setMarker(initialLocation);
+            const coords = parseLatLng(initialLocation);
+            setCenter(coords || defaultCenter);
+            setMarker(coords);
             return;
           }
 
@@ -190,8 +211,9 @@ const MapPicker = ({
     }
 
     if (fallbackToInitial && initialLocation) {
-      setCenter(initialLocation);
-      setMarker(initialLocation);
+      const coords = parseLatLng(initialLocation);
+      setCenter(coords || defaultCenter);
+      setMarker(coords);
       return;
     }
 
@@ -214,7 +236,7 @@ const MapPicker = ({
 
     clearCircleOverlay();
 
-    if (!marker) {
+    if (!marker || !showRadius) {
       return;
     }
 
@@ -235,10 +257,10 @@ const MapPicker = ({
     return () => {
       clearCircleOverlay();
     };
-  }, [isLoaded, marker, radius, clearCircleOverlay]);
+  }, [isLoaded, marker, radius, showRadius, clearCircleOverlay]);
 
   const handleConfirm = async () => {
-    if (!marker) {
+    if (!marker || typeof marker.lat !== 'number' || typeof marker.lng !== 'number') {
       alert("Please select a location on the map.");
       return;
     }
@@ -256,7 +278,7 @@ const MapPicker = ({
 
       onConfirm({
         ...marker,
-        radius,
+        ...(showRadius ? { radius } : {}),
         address: result.formatted_address,
         ...extractAddressDetails(result),
       });
@@ -266,7 +288,7 @@ const MapPicker = ({
       // Fallback: confirm without address
       onConfirm({
         ...marker,
-        radius,
+        ...(showRadius ? { radius } : {}),
         address: address || "Custom Location",
       });
       onClose();
@@ -289,12 +311,12 @@ const MapPicker = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Select Shop Location"
+      title={title}
       size="md"
       footer={
         <div className="flex justify-between w-full items-center">
           <div className="text-sm text-gray-500">
-            {marker
+            {marker && typeof marker.lat === 'number' && typeof marker.lng === 'number'
               ? `${marker.lat.toFixed(4)}, ${marker.lng.toFixed(4)}`
               : "No location selected"}
           </div>
@@ -302,7 +324,10 @@ const MapPicker = ({
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={handleConfirm} disabled={!marker || isGeocoding}>
+            <Button 
+              onClick={handleConfirm} 
+              disabled={!marker || typeof marker.lat !== 'number' || typeof marker.lng !== 'number' || isGeocoding}
+            >
               {isGeocoding ? (
                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
               ) : null}
@@ -325,7 +350,7 @@ const MapPicker = ({
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
                   <Input
-                    placeholder="Search for your shop area..."
+                    placeholder={searchPlaceholder}
                     className="pl-10"
                   />
                 </div>
@@ -360,7 +385,7 @@ const MapPicker = ({
                 mapTypeControl: false,
                 fullscreenControl: false,
               }}>
-              {marker && (
+              {marker && typeof marker.lat === 'number' && typeof marker.lng === 'number' && (
                 <Marker
                   key={`${marker.lat.toFixed(6)}-${marker.lng.toFixed(6)}`}
                   position={marker}
@@ -373,32 +398,33 @@ const MapPicker = ({
           )}
         </div>
 
-        <div className="bg-gray-50 p-4 rounded-lg space-y-3">
-          <div className="flex justify-between items-center">
-            <label className="text-sm font-medium text-gray-700">
-              Service Radius (km)
-            </label>
-            <span className="text-sm font-bold text-primary">{radius} km</span>
+        {showRadius && (
+          <div className="bg-gray-50 p-4 rounded-lg space-y-3">
+            <div className="flex justify-between items-center">
+              <label className="text-sm font-medium text-gray-700">
+                {radiusLabel}
+              </label>
+              <span className="text-sm font-bold text-primary">{radius} km</span>
+            </div>
+            <input
+              type="range"
+              min="1"
+              max={maxRadius}
+              step="1"
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value))}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
+            />
+            <div className="flex justify-between text-[10px] text-gray-400">
+              <span>1 km</span>
+              <span>{maxRadius} km</span>
+            </div>
+            <p className="text-xs text-gray-500 flex items-start gap-1">
+              <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" />
+              {descriptionText}
+            </p>
           </div>
-          <input
-            type="range"
-            min="1"
-            max={maxRadius}
-            step="1"
-            value={radius}
-            onChange={(e) => setRadius(Number(e.target.value))}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
-          />
-          <div className="flex justify-between text-[10px] text-gray-400">
-            <span>1 km</span>
-            <span>{maxRadius} km</span>
-          </div>
-          <p className="text-xs text-gray-500 flex items-start gap-1">
-            <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" />
-            Customers within this radius from your shop will be able to see and
-            order from you.
-          </p>
-        </div>
+        )}
       </div>
     </Modal>
   );

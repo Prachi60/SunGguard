@@ -92,6 +92,7 @@ const ShopByStoreManagement = React.lazy(
 const AdminSettings = React.lazy(() => import("../pages/AdminSettings"));
 const EnvSettings = React.lazy(() => import("../pages/EnvSettings"));
 const AdminProfile = React.lazy(() => import("../pages/AdminProfile"));
+const AdminParcelDashboard = React.lazy(() => import("../pages/AdminParcelDashboard"));
 
 const navItems = [
   {
@@ -199,6 +200,12 @@ const navItems = [
     color: "red",
   },
   {
+    label: "Parcel Delivery",
+    path: "/admin/parcels",
+    icon: Truck,
+    color: "indigo",
+  },
+  {
     label: "Settings",
     path: "/admin/settings",
     icon: Settings,
@@ -272,8 +279,9 @@ const AdminRoutes = () => {
         <Route path="/orders/:status" element={<OrdersList />} />
         <Route path="/orders/view/:orderId" element={<OrderDetail />} />
         <Route path="/returns" element={<Returns />} />
-        <Route path="/billing" element={<BillingCharges />} />
+         <Route path="/billing" element={<BillingCharges />} />
         <Route path="/settings" element={<AdminSettings />} />
+        <Route path="/parcels" element={<AdminParcelDashboard />} />
         <Route path="/env" element={<EnvSettings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

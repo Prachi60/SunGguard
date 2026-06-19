@@ -262,3 +262,18 @@ export function onDeliveryOtpValidated(getToken, handler) {
     s.off("delivery:otp:validated", wrappedHandler);
   };
 }
+
+export function onParcelNew(getToken, handler) {
+  const s = getOrderSocket(getToken);
+  if (!s || typeof handler !== "function") return () => {};
+  s.on("parcel:new", handler);
+  return () => s.off("parcel:new", handler);
+}
+
+export function onParcelAssigned(getToken, handler) {
+  const s = getOrderSocket(getToken);
+  if (!s || typeof handler !== "function") return () => {};
+  s.on("parcel:assigned", handler);
+  return () => s.off("parcel:assigned", handler);
+}
+

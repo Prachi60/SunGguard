@@ -22,7 +22,8 @@ export const signupDelivery = async (req, res) => {
             name, phone, vehicleType,
             email, address, vehicleNumber,
             drivingLicenseNumber,
-            accountHolder, accountNumber, ifsc
+            accountHolder, accountNumber, ifsc,
+            isParcelService
         } = req.body;
 
         if (!name || !phone) {
@@ -83,6 +84,7 @@ export const signupDelivery = async (req, res) => {
             accountHolder,
             accountNumber,
             ifsc,
+            isParcelService: isParcelService !== undefined ? (isParcelService !== "false") : true,
             profileImage: profileImageUrl,
             documents: {
                 aadhar: aadharUrl,
@@ -123,8 +125,12 @@ export const loginDelivery = async (req, res) => {
 
         const delivery = await Delivery.findOne({ phone });
 
-        if (!delivery || !delivery.isVerified) {
+        if (!delivery) {
             return handleResponse(res, 404, "Delivery partner not found");
+        }
+
+        if (!delivery.isVerified) {
+            return handleResponse(res, 403, "Your application is pending admin approval.");
         }
 
         let otp = generateOTP();
@@ -167,8 +173,12 @@ export const verifyDeliveryOTP = async (req, res) => {
             return handleResponse(res, 400, "Invalid or expired OTP");
         }
 
-        delivery.isVerified = true;
-        delivery.isOnline = true; // Auto-activate delivery boy on login
+        // Only set isOnline to true if the rider is verified
+        if (delivery.isVerified) {
+            delivery.isOnline = true;
+        } else {
+            delivery.isOnline = false;
+        }
         delivery.otp = undefined;
         delivery.otpExpiry = undefined;
         delivery.lastLogin = new Date();
@@ -206,7 +216,7 @@ export const getDeliveryProfile = async (req, res) => {
 ================================ */
 export const updateDeliveryProfile = async (req, res) => {
     try {
-        const { name, vehicleType, vehicleNumber, drivingLicenseNumber, currentArea, isOnline } = req.body;
+        const { name, vehicleType, vehicleNumber, drivingLicenseNumber, currentArea, isOnline, isParcelService } = req.body;
 
         const delivery = await Delivery.findById(req.user.id);
         if (!delivery) {
@@ -225,6 +235,7 @@ export const updateDeliveryProfile = async (req, res) => {
         const willGoOffline =
             typeof isOnline !== 'undefined' && isOnline === false && wasOnline;
         if (typeof isOnline !== 'undefined') delivery.isOnline = isOnline;
+        if (typeof isParcelService !== 'undefined') delivery.isParcelService = isParcelService;
 
         await delivery.save();
 

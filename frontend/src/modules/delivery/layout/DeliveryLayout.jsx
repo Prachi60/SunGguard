@@ -11,7 +11,9 @@ import {
   getOrderSocket,
   onDeliveryBroadcast,
   onDeliveryBroadcastWithdrawn,
+  onParcelAssigned,
 } from "@/core/services/orderSocket";
+import { parcelApi } from "../../customer/services/parcelApi";
 import {
   loadHandledIncomingOrderIds,
   markIncomingOrderHandled,
@@ -36,10 +38,16 @@ const DeliveryLayout = () => {
   const { user } = useAuth();
 
   const [activeOrder, setActiveOrder] = useState(null);
+  const [activeParcel, setActiveParcel] = useState(null);
   const [timeLeft, setTimeLeft] = useState(60);
   const [acceptWindowTotal, setAcceptWindowTotal] = useState(60);
   const shownOrderIdsRef = useRef(new Set());
   const activeOrderRef = useRef(null);
+  const activeParcelRef = useRef(null);
+
+  useEffect(() => {
+    activeParcelRef.current = activeParcel;
+  }, [activeParcel]);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [availableOrdersCount, setAvailableOrdersCount] = useState(0);
   const [isAcceptingOrder, setIsAcceptingOrder] = useState(false);
@@ -71,7 +79,7 @@ const DeliveryLayout = () => {
 
     if (!ringtoneRetryTimerRef.current) {
       ringtoneRetryTimerRef.current = setInterval(() => {
-        if (!activeOrderRef.current) return;
+        if (!activeOrderRef.current && !activeParcelRef.current) return;
         const currentAudio = getOrderRingtone();
         if (!currentAudio.paused) return;
         currentAudio.play().catch(() => { });
@@ -84,7 +92,7 @@ const DeliveryLayout = () => {
       typeof document !== "undefined"
     ) {
       const unlockPlayback = () => {
-        if (!activeOrderRef.current) return;
+        if (!activeOrderRef.current && !activeParcelRef.current) return;
         const currentAudio = getOrderRingtone();
         if (!currentAudio.paused) return;
         currentAudio.play().catch(() => { });
@@ -211,13 +219,13 @@ const DeliveryLayout = () => {
   }, []);
 
   useEffect(() => {
-    if (activeOrder) {
+    if (activeOrder || activeParcel) {
       startOrderRingtone();
       return undefined;
     }
     stopOrderRingtone();
     return undefined;
-  }, [activeOrder]);
+  }, [activeOrder, activeParcel]);
 
   useEffect(() => {
     return () => {
@@ -552,6 +560,16 @@ const DeliveryLayout = () => {
         setActiveOrder(null);
         toast.info("Another delivery partner accepted this order.");
       }
+    });
+  }, [user?.isOnline]);
+
+  useEffect(() => {
+    if (!user?.isOnline) return undefined;
+    const getToken = getDeliveryToken;
+    return onParcelAssigned(getToken, (parcel) => {
+      console.log("[DeliveryLayout] Received new parcel assignment:", parcel);
+      if (activeOrderRef.current || activeParcelRef.current) return;
+      setActiveParcel(parcel);
     });
   }, [user?.isOnline]);
 
@@ -896,6 +914,110 @@ const DeliveryLayout = () => {
                         className="py-4 rounded-2xl bg-primary text-primary-foreground font-black text-xs uppercase tracking-wider shadow-lg shadow-primary/30 active:scale-95 disabled:opacity-60 disabled:pointer-events-none"
                       >
                         {isAcceptingOrder ? "Accepting…" : "Accept"}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+
+            {activeParcel && (
+              <div
+                className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-900/85 backdrop-blur-sm"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="delivery-parcel-alert-title"
+              >
+                <motion.div
+                  key={activeParcel._id}
+                  initial={{ scale: 0.92, opacity: 0, y: 24 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.96, opacity: 0, y: 16 }}
+                  transition={{ type: "spring", stiffness: 380, damping: 28 }}
+                  className="bg-white rounded-[32px] p-6 w-full max-w-[340px] shadow-2xl border-4 border-primary/20"
+                >
+                  <div className="flex flex-col items-center">
+                    <div className="h-16 w-16 bg-primary/10 rounded-full flex items-center justify-center mb-4 animate-bounce">
+                      <BellRing className="h-8 w-8 text-primary" />
+                    </div>
+
+                    <h2
+                      id="delivery-parcel-alert-title"
+                      className="text-xl font-black text-slate-900 mb-1"
+                    >
+                      New Parcel Assigned!
+                    </h2>
+                    
+                    <p className="text-xs text-slate-500 font-bold mb-4">
+                      ID: #{activeParcel._id.slice(-6)}
+                    </p>
+
+                    <div className="w-full bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-3 mb-6 text-left text-xs">
+                      <div>
+                        <strong className="text-slate-800 block mb-0.5">Pickup Address:</strong>
+                        <p className="text-slate-600 font-medium">{activeParcel.pickupAddress.name} ({activeParcel.pickupAddress.phone})</p>
+                        <p className="text-slate-400 font-medium mt-0.5 truncate">{activeParcel.pickupAddress.fullAddress}</p>
+                      </div>
+                      <div className="border-t border-slate-200/60 pt-2.5">
+                        <strong className="text-slate-800 block mb-0.5">Dropoff Address:</strong>
+                        <p className="text-slate-600 font-medium">{activeParcel.dropAddress.name} ({activeParcel.dropAddress.phone})</p>
+                        <p className="text-slate-400 font-medium mt-0.5 truncate">{activeParcel.dropAddress.fullAddress}</p>
+                      </div>
+                      <div className="border-t border-slate-200/60 pt-2.5 flex justify-between items-center">
+                        <div>
+                          <strong className="text-slate-800 block mb-0.5">Rider Payout (80%):</strong>
+                          <span className="text-brand-600 font-black text-sm">₹{(activeParcel.fare * 0.8).toFixed(2)}</span>
+                        </div>
+                        <div className="text-right">
+                          <strong className="text-slate-800 block mb-0.5">Weight:</strong>
+                          <span className="text-slate-600 font-bold">{activeParcel.weight} KG</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 w-full">
+                      <button
+                        type="button"
+                        disabled={isAcceptingOrder}
+                        className="py-4 rounded-2xl bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-wider hover:bg-slate-200/80 disabled:opacity-50 disabled:pointer-events-none"
+                        onClick={async () => {
+                          try {
+                            setIsAcceptingOrder(true);
+                            await parcelApi.riderUpdateStatus({ parcelId: activeParcel._id, status: "CANCELLED" });
+                            toast.error("Parcel task declined");
+                          } catch (err) {
+                            console.error(err);
+                          } finally {
+                            setIsAcceptingOrder(false);
+                            setActiveParcel(null);
+                            stopOrderRingtone();
+                          }
+                        }}
+                      >
+                        Decline
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isAcceptingOrder}
+                        className="py-4 rounded-2xl bg-primary text-primary-foreground font-black text-xs uppercase tracking-wider shadow-lg shadow-primary/30 active:scale-95 disabled:opacity-60 disabled:pointer-events-none"
+                        onClick={async () => {
+                          try {
+                            setIsAcceptingOrder(true);
+                            const res = await parcelApi.riderUpdateStatus({ parcelId: activeParcel._id, status: "ACCEPTED" });
+                            if (res.data?.success) {
+                              toast.success("Parcel task accepted!");
+                              navigate('/delivery/dashboard');
+                            }
+                          } catch (err) {
+                            toast.error(err.response?.data?.message || "Failed to accept parcel task");
+                          } finally {
+                            setIsAcceptingOrder(false);
+                            setActiveParcel(null);
+                            stopOrderRingtone();
+                          }
+                        }}
+                      >
+                        Accept Task
                       </button>
                     </div>
                   </div>

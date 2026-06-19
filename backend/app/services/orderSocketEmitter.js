@@ -95,6 +95,12 @@ export function emitToAdmin(adminId, { event, payload }) {
   s.to(`admin:${id}`).emit(event, payload);
 }
 
+export function emitToAdmins(event, payload) {
+  const s = getIo();
+  if (!s || !event) return;
+  s.to("admin:orders").emit(event, payload);
+}
+
 /**
  * Emit a custom event to everyone who has joined the order room
  * (via `join_order`). Used for events that aren't pure workflow

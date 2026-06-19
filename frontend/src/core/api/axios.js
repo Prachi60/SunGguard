@@ -24,15 +24,16 @@ const ROLE_TO_STORAGE_KEY = {
 function tokenForRequestUrl(url) {
     if (!url) return null;
     if (url.startsWith('/seller')) return getStoredAuthToken(STORAGE_KEYS.AUTH_SELLER);
-    if (url.startsWith('/admin')) return getStoredAuthToken(STORAGE_KEYS.AUTH_ADMIN);
-    if (url.startsWith('/delivery')) return getStoredAuthToken(STORAGE_KEYS.AUTH_DELIVERY);
+    if (url.startsWith('/admin') || url.includes('/admin/')) return getStoredAuthToken(STORAGE_KEYS.AUTH_ADMIN);
+    if (url.startsWith('/delivery') || url.includes('/rider/')) return getStoredAuthToken(STORAGE_KEYS.AUTH_DELIVERY);
     if (
         url.startsWith('/customer') ||
         url.startsWith('/cart') ||
         url.startsWith('/wishlist') ||
         url.startsWith('/categories') ||
         url.startsWith('/products') ||
-        url.startsWith('/payments')
+        url.startsWith('/payments') ||
+        url.startsWith('/parcel')
     ) {
         return getStoredAuthToken(STORAGE_KEYS.AUTH_CUSTOMER);
     }

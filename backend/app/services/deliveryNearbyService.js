@@ -10,11 +10,10 @@ const HAVERSINE_FALLBACK_LIMIT = () =>
   parseInt(process.env.DELIVERY_BROADCAST_HAVERSINE_LIMIT || "2000", 10);
 
 function buildDeliveryFilter() {
-  const q = { isOnline: true };
-  if (requireVerifiedForBroadcast()) {
-    q.isVerified = true;
-  }
-  return q;
+  return {
+    isOnline: true,
+    isVerified: true,
+  };
 }
 
 function filterByHaversine(candidates, lat, lng, maxDistanceM) {

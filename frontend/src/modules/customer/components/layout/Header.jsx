@@ -135,6 +135,7 @@ const Header = () => {
 
                         <Link to="/categories" className="text-sm font-medium transition-colors hover:text-[var(--primary)]">Categories</Link>
                         <Link to="/offers" className="text-sm font-medium transition-colors hover:text-[var(--primary)]">Offers</Link>
+                        <Link to="/parcel" className="text-sm font-medium transition-colors hover:text-[var(--primary)]">Parcel Delivery</Link>
                     </nav>
 
                     {/* Search Bar - Hidden on checkout page */}

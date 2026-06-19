@@ -79,7 +79,15 @@ const deliverySchema = new mongoose.Schema(
 
         isOnline: {
             type: Boolean,
+            default: false,
+        },
+        isParcelService: {
+            type: Boolean,
             default: true,
+        },
+        isBusy: {
+            type: Boolean,
+            default: false,
         },
         location: {
             type: {

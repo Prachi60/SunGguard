@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import SellerOrdersContext from '@/modules/seller/context/SellerOrdersContext';
 import SellerEarningsContext, { defaultEarnings } from '@/modules/seller/context/SellerEarningsContext';
-import { getOrderSocket, onSellerOrderNew, onReturnDropOtp } from '@/core/services/orderSocket';
+import { getOrderSocket, onSellerOrderNew, onReturnDropOtp, onParcelNew } from '@/core/services/orderSocket';
 import { createSocketTokenReader } from '@core/utils/authStorage';
 import { STORAGE_KEYS } from '@core/utils/storage';
 import orderAlertSound from '@/assets/sounds/order_alert.mp3';
@@ -47,6 +47,7 @@ const isEarningsRoute = (path) =>
 const DashboardLayout = ({ children, navItems, title }) => {
     const [newOrderAlert, setNewOrderAlert] = useState(null);
     const [newReturnAlert, setNewReturnAlert] = useState(null);
+    const [newParcelAlert, setNewParcelAlert] = useState(null);
     const [shownOrderIds, setShownOrderIds] = useState(() => new Set());
     const [shownReturnOrderIds, setShownReturnOrderIds] = useState(() => new Set());
     const [timeLeft, setTimeLeft] = useState(0);
@@ -230,13 +231,13 @@ const DashboardLayout = ({ children, navItems, title }) => {
     }, [role]);
 
     useEffect(() => {
-        if (newOrderAlert) {
+        if (newOrderAlert || newParcelAlert) {
             startOrderRingtone();
             return undefined;
         }
         stopOrderRingtone();
         return undefined;
-    }, [newOrderAlert]);
+    }, [newOrderAlert, newParcelAlert]);
 
     useEffect(() => {
         return () => {
@@ -267,6 +268,19 @@ const DashboardLayout = ({ children, navItems, title }) => {
         return () => {
             unsubscribeSellerNew();
             unsubscribeDrop();
+        };
+    }, [role]);
+
+    useEffect(() => {
+        if (role !== 'admin') return undefined;
+        const getToken = createSocketTokenReader(STORAGE_KEYS.AUTH_ADMIN);
+        getOrderSocket(getToken);
+        const unsubscribeParcelNew = onParcelNew(getToken, (parcel) => {
+            console.log("[DashboardLayout] Received new parcel booking:", parcel);
+            setNewParcelAlert(parcel);
+        });
+        return () => {
+            unsubscribeParcelNew();
         };
     }, [role]);
 
@@ -523,6 +537,50 @@ const DashboardLayout = ({ children, navItems, title }) => {
                                 >
                                     Dismiss Alert
                                 </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+
+                {newParcelAlert && (
+                    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                            className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border border-slate-100"
+                        >
+                            <div className="flex flex-col items-center text-center">
+                                <div className="h-20 w-20 bg-primary/10 rounded-full flex items-center justify-center mb-6 animate-bounce">
+                                    <BellRing className="h-10 w-10 text-primary" />
+                                </div>
+
+                                <h2 className="text-2xl font-black text-slate-900 mb-2">New Parcel Request!</h2>
+                                <p className="text-slate-600 font-medium mb-6">
+                                    A new parcel delivery request <span className="text-primary font-bold">#{newParcelAlert._id.slice(-6)}</span> has been booked for <span className="text-slate-900 font-bold">₹{newParcelAlert.fare}</span>
+                                </p>
+
+                                <div className="flex gap-3 w-full">
+                                    <button
+                                        onClick={() => {
+                                            stopOrderRingtone();
+                                            setNewParcelAlert(null);
+                                        }}
+                                        className="flex-1 py-3 px-4 rounded-xl text-center text-xs font-black uppercase tracking-widest border border-slate-200 hover:bg-slate-50 text-slate-500 transition-all duration-300"
+                                    >
+                                        Dismiss
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            stopOrderRingtone();
+                                            setNewParcelAlert(null);
+                                            navigate('/admin/parcels');
+                                        }}
+                                        className="flex-1 py-3 px-4 rounded-xl text-center text-xs font-black uppercase tracking-widest bg-primary hover:bg-primary-dark text-white shadow-lg shadow-primary/20 transition-all duration-300"
+                                    >
+                                        View & Assign
+                                    </button>
+                                </div>
                             </div>
                         </motion.div>
                     </div>

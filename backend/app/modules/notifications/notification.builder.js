@@ -358,6 +358,34 @@ function eventDefinition(eventType) {
           return `Only ${currentStock} left for ${itemLabel}. Restock soon.`;
         },
       };
+    case NOTIFICATION_EVENTS.PARCEL_REQUESTED:
+      return {
+        role: NOTIFICATION_ROLES.CUSTOMER,
+        recipientIds: (payload) => normalizeIdList(payload.userId || payload.customerId),
+        title: () => "Parcel Request Created",
+        body: (payload) => payload.body || "Your parcel request has been created.",
+      };
+    case NOTIFICATION_EVENTS.PARCEL_ASSIGNED:
+      return {
+        role: NOTIFICATION_ROLES.DELIVERY,
+        recipientIds: (payload) => normalizeIdList(payload.deliveryId),
+        title: () => "New Parcel Assigned",
+        body: (payload) => payload.body || "You have been assigned a new parcel delivery.",
+      };
+    case NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE:
+      return {
+        role: NOTIFICATION_ROLES.CUSTOMER,
+        recipientIds: (payload) => normalizeIdList(payload.userId || payload.customerId),
+        title: () => "Parcel Status Update",
+        body: (payload) => payload.body || "Your parcel status has been updated.",
+      };
+    case NOTIFICATION_EVENTS.PARCEL_DELIVERED:
+      return {
+        role: NOTIFICATION_ROLES.CUSTOMER,
+        recipientIds: (payload) => normalizeIdList(payload.userId || payload.customerId),
+        title: () => "Parcel Delivered",
+        body: (payload) => payload.body || "Your parcel has been delivered successfully.",
+      };
     default:
       return null;
   }
@@ -389,6 +417,22 @@ function eventData(eventType, payload = {}, role) {
     return {
       eventType,
       ticketId,
+      link,
+      ...(payload.data || {}),
+    };
+  }
+  if ([
+    NOTIFICATION_EVENTS.PARCEL_REQUESTED,
+    NOTIFICATION_EVENTS.PARCEL_ASSIGNED,
+    NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE,
+    NOTIFICATION_EVENTS.PARCEL_DELIVERED
+  ].includes(eventType)) {
+    const parcelId = String(payload.parcelId || "").trim() || undefined;
+    const baseUrl = getFrontendBaseUrl();
+    const link = parcelId ? `${baseUrl}/parcel/track/${encodeURIComponent(parcelId)}` : `${baseUrl}/parcel/history`;
+    return {
+      eventType,
+      parcelId,
       link,
       ...(payload.data || {}),
     };

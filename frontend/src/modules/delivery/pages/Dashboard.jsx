@@ -9,6 +9,13 @@ import {
   XCircle,
   IndianRupee,
   AlertCircle,
+  Camera,
+  ShieldCheck,
+  CheckCircle2,
+  Lock,
+  LogOut,
+  RefreshCw,
+  Clock,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
@@ -19,14 +26,236 @@ import Card from "@/shared/components/ui/Card";
 
 import { useAuth } from "@core/context/AuthContext";
 import { deliveryApi } from "../services/deliveryApi";
+import { parcelApi } from "../../customer/services/parcelApi";
+import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
+
+const RiderParcelMap = ({ pickupAddress, dropAddress, status }) => {
+  const { isLoaded } = useJsApiLoader({
+    id: "google-map-script-rider-parcel-tracking",
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
+    libraries: ["places"],
+  });
+
+  const [currentLocation, setCurrentLocation] = useState(null);
+  const [directions, setDirections] = useState(null);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCurrentLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      () => {},
+      { enableHighAccuracy: true }
+    );
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setCurrentLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded || !window.google || !currentLocation) return;
+
+    const isHeadingToPickup = ["ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED"].includes(status);
+    const destCoords = isHeadingToPickup ? pickupAddress : dropAddress;
+
+    if (!destCoords?.lat || !destCoords?.lng) return;
+
+    const directionsService = new window.google.maps.DirectionsService();
+    directionsService.route(
+      {
+        origin: currentLocation,
+        destination: { lat: Number(destCoords.lat), lng: Number(destCoords.lng) },
+        travelMode: window.google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === window.google.maps.DirectionsStatus.OK) {
+          setDirections(result);
+        } else {
+          console.error(`Directions request failed: ${status}`);
+        }
+      }
+    );
+  }, [isLoaded, currentLocation, status, pickupAddress.lat, pickupAddress.lng, dropAddress.lat, dropAddress.lng]);
+
+  if (!isLoaded) {
+    return (
+      <div className="h-44 w-full bg-slate-100 rounded-2xl flex items-center justify-center animate-pulse">
+        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Loading Navigation Map...</span>
+      </div>
+    );
+  }
+
+  const isHeadingToPickup = ["ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED"].includes(status);
+  const targetCoords = isHeadingToPickup ? pickupAddress : dropAddress;
+
+  const center = currentLocation || {
+    lat: Number(targetCoords.lat),
+    lng: Number(targetCoords.lng),
+  };
+
+  const mapOptions = {
+    disableDefaultUI: true,
+    zoomControl: true,
+    streetViewControl: false,
+    mapTypeControl: false,
+    fullscreenControl: false,
+  };
+
+  return (
+    <div className="rounded-2xl overflow-hidden border border-slate-100 shadow-inner relative h-48 w-full z-10">
+      <GoogleMap
+        mapContainerStyle={{ width: "100%", height: "100%" }}
+        center={center}
+        zoom={14}
+        options={mapOptions}
+      >
+        {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true }} />}
+
+        {currentLocation && (
+          <Marker
+            position={currentLocation}
+            icon={{
+              path: window.google.maps.SymbolPath.CIRCLE,
+              scale: 7,
+              fillColor: "#3b82f6",
+              fillOpacity: 1,
+              strokeColor: "#ffffff",
+              strokeWeight: 2,
+            }}
+            title="Your Location"
+          />
+        )}
+
+        <Marker
+          position={{ lat: Number(targetCoords.lat), lng: Number(targetCoords.lng) }}
+          label={{
+            text: isHeadingToPickup ? "P" : "D",
+            color: "white",
+            fontWeight: "black",
+          }}
+          title={isHeadingToPickup ? `Pickup: ${pickupAddress.fullAddress}` : `Dropoff: ${dropAddress.fullAddress}`}
+        />
+      </GoogleMap>
+    </div>
+  );
+};
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, logout } = useAuth();
+
+  if (user && !user.isVerified) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col justify-between p-6 relative overflow-hidden font-sans max-w-md mx-auto border-x border-slate-900 shadow-2xl">
+        {/* Decorative Background Glows */}
+        <div className="absolute top-[-10%] right-[-10%] h-[300px] w-[300px] rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute bottom-[-10%] left-[-10%] h-[300px] w-[300px] rounded-full bg-primary/10 blur-3xl" />
+
+        {/* Top Header */}
+        <header className="flex justify-between items-center py-4 relative z-10">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-full overflow-hidden border border-white/20 bg-white/5">
+              <img
+                src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"
+                alt="Profile"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-white/90">{user.name}</h4>
+              <span className="text-[10px] font-medium text-slate-400">Rider Partner</span>
+            </div>
+          </div>
+          <button
+            onClick={logout}
+            className="p-2 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition-colors text-slate-400 hover:text-white"
+          >
+            <LogOut size={16} />
+          </button>
+        </header>
+
+        {/* Center content */}
+        <div className="flex-1 flex flex-col items-center justify-center my-8 text-center relative z-10 max-w-sm mx-auto">
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: "spring", stiffness: 200, damping: 15 }}
+            className="w-20 h-20 bg-amber-500/10 border border-amber-500/20 rounded-3xl flex items-center justify-center mb-6 shadow-[0_8px_30px_rgb(245,158,11,0.05)]"
+          >
+            <Clock size={36} className="text-amber-500 animate-pulse" />
+          </motion.div>
+
+          <h2 className="text-2xl font-black tracking-tight text-white mb-3">
+            Application Under Review
+          </h2>
+          <p className="text-sm text-slate-400 leading-relaxed mb-8">
+            Your documents (Aadhaar, PAN, & Driving License) are currently being verified by our operations team. Approval usually takes less than 24 hours.
+          </p>
+
+          <div className="w-full space-y-4 bg-white/[0.03] border border-white/5 rounded-2xl p-5 text-left">
+            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Verification Checklist</h4>
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-[10px] text-emerald-400 font-bold">✓</div>
+                <span className="text-xs font-semibold text-slate-300">Identity & Document Uploaded</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-[10px] text-amber-400 font-black animate-pulse">●</div>
+                <span className="text-xs font-semibold text-slate-300">Background Verification in Progress</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[10px] text-slate-500 font-bold">-</div>
+                <span className="text-xs font-semibold text-slate-500">Account Activation</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Actions */}
+        <footer className="space-y-3 relative z-10">
+          <Button
+            onClick={async () => {
+              const res = await refreshUser();
+              if (res?.isVerified) {
+                toast.success("Congratulations! Your account has been verified.");
+                window.location.reload();
+              } else {
+                toast.info("Verification is still in progress. Please check back later.");
+              }
+            }}
+            variant="primary"
+            className="w-full h-12 rounded-xl font-black text-xs uppercase tracking-widest bg-gradient-to-r from-sky-500 to-primary text-white border-none shadow-lg shadow-sky-500/20"
+          >
+            <RefreshCw size={14} className="mr-2" />
+            Refresh Status
+          </Button>
+          <div className="text-center text-[10px] font-bold text-slate-500 tracking-wider uppercase py-2">
+            Support ID: #{user?._id ? user._id.slice(-6).toUpperCase() : "PENDING"}
+          </div>
+        </footer>
+      </div>
+    );
+  }
   const [isOnline, setIsOnline] = useState(user?.isOnline || false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [activeTab, setActiveTab] = useState("delivery"); // 'delivery' or 'return'
   const [availableOrders, setAvailableOrders] = useState([]);
+  const [assignedParcels, setAssignedParcels] = useState([]);
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [activeParcelForOtp, setActiveParcelForOtp] = useState(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [completionPhoto, setCompletionPhoto] = useState("");
   const [earnings, setEarnings] = useState({
     today: 0,
     deliveries: 0,
@@ -79,10 +308,86 @@ const Dashboard = () => {
     }
   };
 
+  const fetchAssignedParcels = async () => {
+    try {
+      const response = await parcelApi.riderGetAssigned();
+      if (response.data.success) {
+        setAssignedParcels(response.data.results || response.data.result || []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch assigned parcels:", error);
+    }
+  };
+
+  const handleUpdateParcelStatus = async (parcelId, status, fileData = null) => {
+    try {
+      const payload = { parcelId, status };
+      if (fileData) {
+        payload.pickupProofImage = fileData;
+      }
+      const response = await parcelApi.riderUpdateStatus(payload);
+      if (response.data.success) {
+        toast.success(`Parcel status updated to ${status}!`);
+        fetchAssignedParcels();
+      } else {
+        toast.error(response.data.message || "Failed to update status");
+      }
+    } catch (error) {
+      toast.error("Status update request failed");
+    }
+  };
+
+  const handleUploadPhoto = (e, callback) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    if (file.size > 2 * 1024 * 1024) {
+      return toast.error("Photo size should be less than 2 MB");
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      callback(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCompleteParcelSubmit = async (e) => {
+    e.preventDefault();
+    if (!otpCode) return toast.error("Please enter the delivery OTP code");
+    
+    try {
+      const response = await parcelApi.riderCompleteDelivery({
+        parcelId: activeParcelForOtp._id,
+        otp: otpCode,
+        deliveryProofImage: completionPhoto
+      });
+      if (response.data.success) {
+        toast.success("Delivery completed successfully!");
+        setShowOtpModal(false);
+        setActiveParcelForOtp(null);
+        setOtpCode("");
+        setCompletionPhoto("");
+        fetchAssignedParcels();
+        fetchStats();
+      } else {
+        toast.error(response.data.message || "Failed to verify OTP");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "OTP verification failed");
+    }
+  };
+
   useEffect(() => {
     fetchStats();
     fetchNotifications();
-    if (isOnline) fetchAvailableOrders();
+    if (isOnline) {
+      if (activeTab === "parcel") {
+        fetchAssignedParcels();
+      } else {
+        fetchAvailableOrders();
+      }
+    }
   }, [isOnline, activeTab]);
 
   const handleOnlineToggle = async () => {
@@ -258,6 +563,17 @@ const Dashboard = () => {
           >
             Returns
           </button>
+          <button
+            onClick={() => setActiveTab("parcel")}
+            className={cn(
+              "flex-1 py-3 px-4 rounded-xl text-center text-xs font-black transition-all duration-300 uppercase tracking-widest",
+              activeTab === "parcel"
+                ? "bg-white text-primary shadow-sm ring-1 ring-black/5"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-200/50"
+            )}
+          >
+            Parcels
+          </button>
         </div>
       </div>
 
@@ -397,7 +713,7 @@ const Dashboard = () => {
                 </div>
               </motion.div>
             )
-          ) : (
+          ) : activeTab === 'return' ? (
             <motion.div
               key="returns-list"
               initial={{ opacity: 0 }}
@@ -464,9 +780,226 @@ const Dashboard = () => {
                 </div>
               )}
             </motion.div>
-          )}
+          ) : activeTab === 'parcel' ? (
+              <motion.div
+                key="parcels-list"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-4"
+              >
+                <div className="flex justify-between items-center mb-1">
+                  <h3 className="text-sm font-bold text-gray-800 tracking-tight">Assigned Parcels</h3>
+                  <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full uppercase">
+                    {assignedParcels.length} Active Tasks
+                  </span>
+                </div>
+
+                {assignedParcels.length > 0 ? (
+                  assignedParcels.map((parcel) => (
+                    <Card key={parcel._id} className="p-5 border-2 border-primary/5 hover:border-primary/15 transition-all shadow-sm space-y-4 bg-white">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="text-[10px] font-black text-blue-600 uppercase tracking-wider block mb-0.5">Rider Payout (80%)</span>
+                          <span className="text-base font-black text-slate-800 block">₹{(parcel.fare * 0.8).toFixed(2)}</span>
+                          <span className="text-[10px] text-slate-400 font-bold block mt-1">ID: #{parcel._id.slice(-6)}</span>
+                        </div>
+                        <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full uppercase ${
+                          parcel.status === 'ACCEPTED' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
+                          'bg-amber-50 text-amber-700 border border-amber-100'
+                        }`}>
+                          {parcel.status}
+                        </span>
+                      </div>
+
+                      {["ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"].includes(parcel.status) && (
+                        <RiderParcelMap
+                          pickupAddress={parcel.pickupAddress}
+                          dropAddress={parcel.dropAddress}
+                          status={parcel.status}
+                        />
+                      )}
+
+                      <div className="space-y-2.5 text-xs text-slate-600 border-t border-b border-slate-100 py-3">
+                        <div>
+                          <strong className="text-slate-800 block mb-0.5">Pickup:</strong>
+                          <p>{parcel.pickupAddress.name} ({parcel.pickupAddress.phone})</p>
+                          <p className="text-slate-400 mt-0.5">{parcel.pickupAddress.fullAddress}</p>
+                        </div>
+                        <div className="border-t border-slate-100 pt-2.5">
+                          <strong className="text-slate-800 block mb-0.5">Dropoff:</strong>
+                          <p>{parcel.dropAddress.name} ({parcel.dropAddress.phone})</p>
+                          <p className="text-slate-400 mt-0.5">{parcel.dropAddress.fullAddress}</p>
+                        </div>
+                        <div className="border-t border-slate-100 pt-2.5">
+                          <strong className="text-slate-800 block mb-0.5">Package:</strong>
+                          <p className="uppercase font-bold">{parcel.packageDetails.packageType} ({parcel.weight} KG)</p>
+                          {parcel.packageDetails.description && (
+                            <p className="text-slate-400 italic mt-0.5">"{parcel.packageDetails.description}"</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action buttons based on status */}
+                      <div className="flex gap-2">
+                        {parcel.status === "ACCEPTED" && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="w-full text-[10px] font-black uppercase tracking-wider h-10 shadow-md"
+                            onClick={() => handleUpdateParcelStatus(parcel._id, "RIDER_ASSIGNED")}
+                          >
+                            Start Riding to Pickup
+                          </Button>
+                        )}
+
+                        {parcel.status === "RIDER_ASSIGNED" && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="w-full text-[10px] font-black uppercase tracking-wider h-10 shadow-md"
+                            onClick={() => handleUpdateParcelStatus(parcel._id, "PICKUP_REACHED")}
+                          >
+                            Mark Reached Pickup
+                          </Button>
+                        )}
+
+                        {parcel.status === "PICKUP_REACHED" && (
+                          <div className="w-full space-y-2">
+                            <label className="w-full h-10 border border-dashed border-primary bg-primary/5 hover:bg-primary/10 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer text-[10px] font-black text-primary uppercase transition-all">
+                              <Camera size={14} />
+                              Upload Pickup Photo
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => handleUploadPhoto(e, (base64) => {
+                                  handleUpdateParcelStatus(parcel._id, "PICKED_UP", base64);
+                                })}
+                              />
+                            </label>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full text-[10px] font-black uppercase tracking-wider h-9"
+                              onClick={() => handleUpdateParcelStatus(parcel._id, "PICKED_UP")}
+                            >
+                              Skip Photo & Pick Up
+                            </Button>
+                          </div>
+                        )}
+
+                        {parcel.status === "PICKED_UP" && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="w-full text-[10px] font-black uppercase tracking-wider h-10 shadow-md"
+                            onClick={() => handleUpdateParcelStatus(parcel._id, "OUT_FOR_DELIVERY")}
+                          >
+                            Start Delivery Ride
+                          </Button>
+                        )}
+
+                        {parcel.status === "OUT_FOR_DELIVERY" && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="w-full text-[10px] font-black uppercase tracking-wider h-10 shadow-md bg-green-600 hover:bg-green-700"
+                            onClick={() => {
+                              setActiveParcelForOtp(parcel);
+                              setShowOtpModal(true);
+                            }}
+                          >
+                            Verify OTP & Deliver
+                          </Button>
+                        )}
+                      </div>
+                    </Card>
+                  ))
+                ) : (
+                  <div className="bg-white rounded-2xl p-10 text-center border-2 border-dashed border-gray-100 flex flex-col items-center">
+                    <div className="w-14 h-14 bg-gray-50 rounded-full flex items-center justify-center mb-4 border border-gray-100 opacity-60">
+                      <Package size={20} className="text-gray-400" />
+                    </div>
+                    <h4 className="text-sm font-bold text-gray-800 mb-1">No parcels assigned</h4>
+                    <p className="text-[11px] text-gray-400">Once admin assigns you a parcel delivery, it will appear here.</p>
+                  </div>
+                )}
+              </motion.div>
+          ) : null}
         </AnimatePresence>
       </div>
+
+      {/* OTP Completion Modal */}
+      {showOtpModal && activeParcelForOtp && (
+        <div className="fixed inset-0 z-[1000] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <form onSubmit={handleCompleteParcelSubmit} className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100 max-w-sm w-full space-y-4">
+            <div className="text-center space-y-2">
+              <div className="h-12 w-12 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto border border-green-100">
+                <ShieldCheck size={24} />
+              </div>
+              <h3 className="text-base font-black text-slate-800">Verify Delivery OTP</h3>
+              <p className="text-xs text-slate-400">
+                Ask receiver for the 6-digit OTP code to complete booking #{activeParcelForOtp._id.slice(-6)}.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">OTP Code</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input
+                  type="text"
+                  maxLength={6}
+                  required
+                  placeholder="E.g. 123456"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm font-bold text-slate-800 tracking-widest outline-none focus:border-green-500"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Delivery Photo (Optional)</label>
+              <label className="w-full h-10 border border-dashed border-slate-300 hover:bg-slate-50 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer text-xs font-bold text-slate-600 transition-all">
+                <Camera size={14} />
+                {completionPhoto ? "Photo Attached ✓" : "Upload Delivery Photo"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleUploadPhoto(e, setCompletionPhoto)}
+                />
+              </label>
+              {completionPhoto && (
+                <img src={completionPhoto} alt="Delivery Proof Preview" className="rounded-xl h-24 w-full object-cover border border-slate-200 mt-2" />
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOtpModal(false);
+                  setActiveParcelForOtp(null);
+                  setOtpCode("");
+                  setCompletionPhoto("");
+                }}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 font-bold text-xs text-slate-600 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-green-600 hover:bg-green-700 text-white font-bold text-xs rounded-xl transition-all"
+              >
+                Verify & Complete
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

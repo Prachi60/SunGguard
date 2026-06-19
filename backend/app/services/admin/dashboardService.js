@@ -136,7 +136,7 @@ export async function getAdminDashboardStats() {
     topProducts: topProducts.map((product) => ({
       name: product.name,
       sales: product.sales,
-      rev: `\u20B9${product.rev.toFixed(2)}`,
+      rev: `\u20B9${(product.rev || 0).toFixed(2)}`,
       trend: "+5%",
       cat: "Product",
       image: product.image,

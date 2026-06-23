@@ -95,14 +95,6 @@ const deliverySchema = new mongoose.Schema(
             type: Boolean,
             default: true,
         },
-        isCarWashService: {
-            type: Boolean,
-            default: false,
-        },
-        isBusy: {
-            type: Boolean,
-            default: false,
-        },
         location: {
             type: {
                 type: String,

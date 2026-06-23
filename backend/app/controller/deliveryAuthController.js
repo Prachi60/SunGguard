@@ -22,9 +22,7 @@ export const signupDelivery = async (req, res) => {
             name, phone, vehicleType,
             email, address, vehicleNumber,
             drivingLicenseNumber,
-            accountHolder, accountNumber, ifsc,
-            isParcelService, isCarWashService,
-            experience, experienceDetails
+            accountHolder, accountNumber, ifsc
         } = req.body;
 
         if (!name || !phone) {
@@ -85,8 +83,6 @@ export const signupDelivery = async (req, res) => {
             accountHolder,
             accountNumber,
             ifsc,
-            isParcelService: isParcelService !== undefined ? (isParcelService !== "false") : true,
-            isCarWashService: isCarWashService !== undefined ? (isCarWashService === "true" || isCarWashService === true) : false,
             profileImage: profileImageUrl,
             experience: experience || "",
             experienceDetails: experienceDetails || "",
@@ -220,7 +216,7 @@ export const getDeliveryProfile = async (req, res) => {
 ================================ */
 export const updateDeliveryProfile = async (req, res) => {
     try {
-        const { name, vehicleType, vehicleNumber, drivingLicenseNumber, currentArea, isOnline, isParcelService, isCarWashService, experience, experienceDetails } = req.body;
+        const { name, vehicleType, vehicleNumber, drivingLicenseNumber, currentArea, isOnline } = req.body;
 
         const delivery = await Delivery.findById(req.user.id);
         if (!delivery) {
@@ -241,8 +237,6 @@ export const updateDeliveryProfile = async (req, res) => {
         const willGoOffline =
             typeof isOnline !== 'undefined' && isOnline === false && wasOnline;
         if (typeof isOnline !== 'undefined') delivery.isOnline = isOnline;
-        if (typeof isParcelService !== 'undefined') delivery.isParcelService = isParcelService;
-        if (typeof isCarWashService !== 'undefined') delivery.isCarWashService = isCarWashService;
 
         await delivery.save();
 

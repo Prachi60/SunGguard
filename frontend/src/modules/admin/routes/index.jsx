@@ -92,10 +92,6 @@ const ShopByStoreManagement = React.lazy(
 const AdminSettings = React.lazy(() => import("../pages/AdminSettings"));
 const EnvSettings = React.lazy(() => import("../pages/EnvSettings"));
 const AdminProfile = React.lazy(() => import("../pages/AdminProfile"));
-const AdminParcelDashboard = React.lazy(() => import("../pages/AdminParcelDashboard"));
-const AdminCarWashDashboard = React.lazy(() => import("../pages/AdminCarWashDashboard"));
-const ActiveWashers = React.lazy(() => import("../pages/ActiveWashers"));
-const PendingWashers = React.lazy(() => import("../pages/PendingWashers"));
 
 const navItems = [
   {
@@ -203,22 +199,6 @@ const navItems = [
     color: "red",
   },
   {
-    label: "Parcel Delivery",
-    path: "/admin/parcels",
-    icon: Truck,
-    color: "indigo",
-  },
-  {
-    label: "Car Wash",
-    icon: Sparkles,
-    color: "cyan",
-    children: [
-      { label: "Overview", path: "/admin/car-wash" },
-      { label: "Active Washers", path: "/admin/car-wash/washers/active" },
-      { label: "Waiting for Review", path: "/admin/car-wash/washers/pending" }
-    ]
-  },
-  {
     label: "Settings",
     path: "/admin/settings",
     icon: Settings,
@@ -294,10 +274,6 @@ const AdminRoutes = () => {
         <Route path="/returns" element={<Returns />} />
          <Route path="/billing" element={<BillingCharges />} />
         <Route path="/settings" element={<AdminSettings />} />
-        <Route path="/parcels" element={<AdminParcelDashboard />} />
-        <Route path="/car-wash" element={<AdminCarWashDashboard />} />
-        <Route path="/car-wash/washers/active" element={<ActiveWashers />} />
-        <Route path="/car-wash/washers/pending" element={<PendingWashers />} />
         <Route path="/env" element={<EnvSettings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

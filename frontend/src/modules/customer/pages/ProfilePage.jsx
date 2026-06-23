@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
     User, MapPin, Package, CreditCard, Wallet, ChevronRight,
-    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, Truck, Sparkles
+    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell
 } from 'lucide-react';
 import { useAuth } from '@core/context/AuthContext';
 import { useSettings } from '@core/context/SettingsContext';
@@ -157,22 +157,6 @@ const ProfilePage = () => {
                                 path="/orders"
                                 color="var(--primary)"
                                 bg="rgba(16,185,129,0.10)"
-                            />
-                            <MenuItem
-                                icon={Truck}
-                                label="Parcel Delivery"
-                                sub="Send packages up to 1 KG"
-                                path="/parcel"
-                                color="#3b82f6"
-                                bg="rgba(59,130,246,0.10)"
-                            />
-                            <MenuItem
-                                icon={Sparkles}
-                                label="Doorstep Car Wash"
-                                sub="Eco wash packages at your doorstep"
-                                path="/car-wash"
-                                color="#0891b2"
-                                bg="rgba(8,145,178,0.10)"
                             />
                             <MenuItem
                                 icon={CreditCard}

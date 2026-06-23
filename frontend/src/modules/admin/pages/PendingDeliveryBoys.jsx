@@ -465,33 +465,31 @@ return (
                                 </div>
                             </div>
 
-                            {viewingRider.status === 'pending_review' && (
-                                <div className="flex flex-col sm:flex-row gap-4">
-                                    <button
-                                        disabled={isProcessing}
-                                        onClick={() => handleApprove(viewingRider.id)}
-                                        className="flex-1 py-5 bg-slate-900 text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                                    >
-                                        {isProcessing ? (
-                                            <>
-                                                <div className="h-4 w-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                                                Processing Verification...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Check className="h-4 w-4" />
-                                                APPROVE & ACTIVATE RIDER
-                                            </>
-                                        )}
-                                    </button>
-                                    <button
-                                        onClick={() => handleReject(viewingRider.id)}
-                                        className="py-5 px-5 bg-rose-50 text-rose-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-rose-100 transition-all active:scale-95"
-                                    >
-                                        REJECT APPLICATION
-                                    </button>
-                                </div>
-                            )}
+                            <div className="flex flex-col sm:flex-row gap-4">
+                                <button
+                                    disabled={isProcessing}
+                                    onClick={() => handleApprove(viewingRider.id)}
+                                    className="flex-1 py-5 bg-slate-900 text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+                                >
+                                    {isProcessing ? (
+                                        <>
+                                            <div className="h-4 w-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                                            Processing Vetting...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Check className="h-4 w-4" />
+                                            APPROVE & ACTIVATE RIDER
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => handleReject(viewingRider.id)}
+                                    className="py-5 px-5 bg-rose-50 text-rose-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-rose-100 transition-all active:scale-95"
+                                >
+                                    REJECT APPLICATION
+                                </button>
+                            </div>
                         </div>
                     </motion.div>
                 </div>

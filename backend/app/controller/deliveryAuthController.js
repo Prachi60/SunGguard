@@ -23,7 +23,8 @@ export const signupDelivery = async (req, res) => {
             email, address, vehicleNumber,
             drivingLicenseNumber,
             accountHolder, accountNumber, ifsc,
-            isParcelService
+            isParcelService, isCarWashService,
+            experience, experienceDetails
         } = req.body;
 
         if (!name || !phone) {
@@ -85,7 +86,10 @@ export const signupDelivery = async (req, res) => {
             accountNumber,
             ifsc,
             isParcelService: isParcelService !== undefined ? (isParcelService !== "false") : true,
+            isCarWashService: isCarWashService !== undefined ? (isCarWashService === "true" || isCarWashService === true) : false,
             profileImage: profileImageUrl,
+            experience: experience || "",
+            experienceDetails: experienceDetails || "",
             documents: {
                 aadhar: aadharUrl,
                 pan: panUrl,
@@ -216,7 +220,7 @@ export const getDeliveryProfile = async (req, res) => {
 ================================ */
 export const updateDeliveryProfile = async (req, res) => {
     try {
-        const { name, vehicleType, vehicleNumber, drivingLicenseNumber, currentArea, isOnline, isParcelService } = req.body;
+        const { name, vehicleType, vehicleNumber, drivingLicenseNumber, currentArea, isOnline, isParcelService, isCarWashService, experience, experienceDetails } = req.body;
 
         const delivery = await Delivery.findById(req.user.id);
         if (!delivery) {
@@ -228,6 +232,8 @@ export const updateDeliveryProfile = async (req, res) => {
         if (vehicleNumber) delivery.vehicleNumber = vehicleNumber;
         if (drivingLicenseNumber) delivery.drivingLicenseNumber = drivingLicenseNumber;
         if (currentArea) delivery.currentArea = currentArea;
+        if (typeof experience !== 'undefined') delivery.experience = experience;
+        if (typeof experienceDetails !== 'undefined') delivery.experienceDetails = experienceDetails;
 
         // Capture going-offline transition before the save so we know whether
         // to drop the rider's realtime presence nodes after the write.
@@ -236,6 +242,7 @@ export const updateDeliveryProfile = async (req, res) => {
             typeof isOnline !== 'undefined' && isOnline === false && wasOnline;
         if (typeof isOnline !== 'undefined') delivery.isOnline = isOnline;
         if (typeof isParcelService !== 'undefined') delivery.isParcelService = isParcelService;
+        if (typeof isCarWashService !== 'undefined') delivery.isCarWashService = isCarWashService;
 
         await delivery.save();
 

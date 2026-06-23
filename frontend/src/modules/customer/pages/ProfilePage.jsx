@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
     User, MapPin, Package, CreditCard, Wallet, ChevronRight,
-    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, Truck
+    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, Truck, Sparkles
 } from 'lucide-react';
 import { useAuth } from '@core/context/AuthContext';
 import { useSettings } from '@core/context/SettingsContext';
@@ -167,6 +167,14 @@ const ProfilePage = () => {
                                 bg="rgba(59,130,246,0.10)"
                             />
                             <MenuItem
+                                icon={Sparkles}
+                                label="Doorstep Car Wash"
+                                sub="Eco wash packages at your doorstep"
+                                path="/car-wash"
+                                color="#0891b2"
+                                bg="rgba(8,145,178,0.10)"
+                            />
+                            <MenuItem
                                 icon={CreditCard}
                                 label="Order Transactions"
                                 sub="View all payments & refunds"
@@ -227,6 +235,23 @@ const ProfilePage = () => {
                                 path="/about"
                                 color="#14b8a6"
                                 bg="rgba(45,212,191,0.08)"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Partner Program */}
+                    <div className="bg-white rounded-xl overflow-hidden border border-slate-200">
+                        <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Join Our Partner Network</p>
+                        </div>
+                        <div className="divide-y divide-slate-100">
+                            <MenuItem
+                                icon={Sparkles}
+                                label="Register as Car Wash Partner"
+                                sub="Start earning by offering doorstep car washing"
+                                path="/car-wash/partner/auth"
+                                color="#0891b2"
+                                bg="rgba(8,145,178,0.10)"
                             />
                         </div>
                     </div>

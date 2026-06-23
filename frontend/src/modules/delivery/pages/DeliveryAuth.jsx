@@ -16,6 +16,7 @@ import {
   X,
   Camera,
   XCircle,
+  Sparkles,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Lottie from "lottie-react";
@@ -884,6 +885,17 @@ const DeliveryAuth = () => {
                           <>Login Now <ArrowRight className="w-4 h-4" /></>
                         )}
                       </button>
+
+                      <div className="text-center pt-4 border-t border-gray-100 mt-4">
+                        <button
+                          type="button"
+                          onClick={() => navigate("/car-wash/partner/auth")}
+                          className="text-xs font-black text-brand-600 hover:text-brand-700 hover:underline flex items-center justify-center gap-1.5 mx-auto transition-all"
+                        >
+                          <Sparkles size={14} className="text-cyan-500 animate-pulse" />
+                          Are you a Car Wash Partner? Click here
+                        </button>
+                      </div>
                     </div>
                   )}
                 </motion.div>

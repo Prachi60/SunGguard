@@ -19,6 +19,8 @@ import Auth from '../../modules/seller/pages/Auth';
 import ApplicationPending from '../../modules/seller/pages/ApplicationPending';
 import AdminAuth from '../../modules/admin/pages/AdminAuth';
 import DeliveryAuth from '../../modules/delivery/pages/DeliveryAuth';
+import CarWashPartnerAuth from '../../modules/delivery/pages/CarWashPartnerAuth';
+import CarWashPartnerDashboard from '../../modules/delivery/pages/CarWashPartnerDashboard';
 import CustomerAuth from '../../modules/customer/pages/CustomerAuth';
 
 // Customer Pages (lazy-loaded)
@@ -46,6 +48,8 @@ const PaymentStatusPage = lazy(() => import('../../modules/customer/pages/Paymen
 const SearchPage = lazy(() => import('../../modules/customer/pages/SearchPage'));
 const WalletPage = lazy(() => import('../../modules/customer/pages/WalletPage'));
 const ParcelDeliveryPage = lazy(() => import('../../modules/customer/pages/ParcelDeliveryPage'));
+const CarWashBookingPage = lazy(() => import('../../modules/customer/pages/CarWashBookingPage'));
+const CarWashTrackingPage = lazy(() => import('../../modules/customer/pages/CarWashTrackingPage'));
 
 // Lazy load heavy modules
 const SellerModule = lazy(() => import('../../modules/seller/routes/index'));
@@ -111,6 +115,24 @@ const AppRouter = () => {
                     element: <DeliveryAuth />,
                 },
                 {
+                    path: 'delivery/car-wash-auth',
+                    element: <CarWashPartnerAuth />,
+                },
+                {
+                    path: 'car-wash/partner/auth',
+                    element: <CarWashPartnerAuth />,
+                },
+                {
+                    path: 'car-wash/partner/dashboard',
+                    element: (
+                        <ProtectedRoute>
+                            <RoleGuard allowedRoles={[UserRole.DELIVERY]}>
+                                <CarWashPartnerDashboard />
+                            </RoleGuard>
+                        </ProtectedRoute>
+                    ),
+                },
+                {
                     path: 'seller/*',
                     element: (
                         <ProtectedRoute>
@@ -170,6 +192,8 @@ const AppRouter = () => {
                         { path: 'profile/edit', element: <ProtectedRoute><EditProfilePage /></ProtectedRoute> },
                         { path: 'wallet', element: <ProtectedRoute><WalletPage /></ProtectedRoute> },
                         { path: 'parcel', element: <ProtectedRoute><ParcelDeliveryPage /></ProtectedRoute> },
+                        { path: 'car-wash', element: <ProtectedRoute><CarWashBookingPage /></ProtectedRoute> },
+                        { path: 'car-wash/track/:id', element: <ProtectedRoute><CarWashTrackingPage /></ProtectedRoute> },
                         { path: 'search', element: <SearchPage /> },
                     ]
                 },

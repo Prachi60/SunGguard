@@ -236,6 +236,7 @@ const DeliveryLayout = () => {
   const hideBottomNavRoutes = [
     "/delivery/login",
     "/delivery/auth",
+    "/delivery/car-wash-auth",
     "/delivery/splash",
     "/delivery/navigation",
     "/delivery/confirm-delivery",

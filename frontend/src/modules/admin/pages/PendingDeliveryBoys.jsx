@@ -27,6 +27,7 @@ const PendingDeliveryBoys = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [filterStatus, setFilterStatus] = useState('all');
+    const [serviceFilter, setServiceFilter] = useState('all'); // 'all', 'rider', 'washer'
     const [viewingRider, setViewingRider] = useState(null);
     const [isProcessing, setIsProcessing] = useState(false);
 
@@ -34,8 +35,7 @@ const PendingDeliveryBoys = () => {
     const fetchPendingRiders = async () => {
         setIsLoading(true);
         try {
-            // verified=false fetches riders waiting for review
-            const params = { verified: 'false' };
+            const params = {};
             if (searchTerm.trim()) params.search = searchTerm.trim();
             const response = await adminApi.getDeliveryPartners(params);
             const payload = response.data.result || {};
@@ -48,12 +48,16 @@ const PendingDeliveryBoys = () => {
                 phone: r.phone,
                 email: r.email,
                 appliedDate: new Date(r.createdAt).toLocaleDateString(),
-                location: r.currentArea || 'Unknown',
+                location: r.address || r.currentArea || 'Unknown',
                 vehicle: r.vehicleType,
                 documents: Object.keys(r.documents || {}).filter(key => r.documents[key]),
+                documentsRaw: r.documents || {},
                 status: r.isVerified ? 'approved' : 'pending_review',
-                experience: 'Not Specified', // Mock for now
-                preferredArea: r.currentArea || 'Not Specified'
+                experience: r.experience || 'Not Specified',
+                experienceDetails: r.experienceDetails || '',
+                preferredArea: r.address || r.currentArea || 'Not Specified',
+                isCarWashService: r.isCarWashService,
+                isParcelService: r.isParcelService
             }));
 
             setPendingRiders(mappedRiders);
@@ -72,26 +76,32 @@ React.useEffect(() => {
     }, 500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [searchTerm, filterStatus]);
+}, [searchTerm, filterStatus, serviceFilter]);
 
 const filteredRiders = useMemo(() => {
     return pendingRiders.filter(r => {
         const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.phone.includes(searchTerm);
-        const matchesStatus = filterStatus === 'all' || r.status === filterStatus;
-        return matchesSearch && matchesStatus;
+        const matchesStatus = 
+            filterStatus === 'all' || 
+            r.status === filterStatus ||
+            (filterStatus === 'pending' && r.status === 'pending_review');
+        const matchesService = serviceFilter === 'all' ||
+            (serviceFilter === 'rider' && r.isParcelService) ||
+            (serviceFilter === 'washer' && r.isCarWashService);
+        return matchesSearch && matchesStatus && matchesService;
     });
-}, [pendingRiders, searchTerm, filterStatus]);
+}, [pendingRiders, searchTerm, filterStatus, serviceFilter]);
 
 const handleApprove = async (id) => {
     setIsProcessing(true);
     try {
         await adminApi.approveDeliveryPartner(id);
-        toast.success('Rider Approved & Activated!');
+        toast.success('Partner Approved & Activated!');
         setPendingRiders(pendingRiders.filter(r => r.id !== id));
         setViewingRider(null);
     } catch (error) {
         console.error('Approval Error:', error);
-        toast.error('Failed to approve rider');
+        toast.error('Failed to approve partner');
     } finally {
         setIsProcessing(false);
     }
@@ -107,7 +117,7 @@ const handleReject = async (id) => {
             setViewingRider(null);
         } catch (error) {
             console.error('Rejection Error:', error);
-            toast.error('Failed to reject rider');
+            toast.error('Failed to reject application');
         } finally {
             setIsProcessing(false);
         }
@@ -132,7 +142,7 @@ return (
                 <div className="h-10 w-[1px] bg-slate-200 mx-2" />
                 <div className="flex flex-col items-end">
                     <p className="ds-label">Total Pending</p>
-                    <h4 className="ds-h2">{pendingRiders.length}</h4>
+                    <h4 className="ds-h2">{pendingRiders.filter(r => r.status === 'pending_review').length}</h4>
                 </div>
             </div>
         </div>
@@ -150,7 +160,7 @@ return (
                         className="w-full pl-12 pr-4 py-3.5 bg-slate-100/50 border-none rounded-2xl text-xs font-semibold outline-none focus:ring-2 focus:ring-primary/10 transition-all"
                     />
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                     <div className="bg-slate-100/50 p-1 rounded-2xl flex items-center">
                         {['all', 'pending', 'missing_info'].map((status) => (
                             <button
@@ -167,6 +177,28 @@ return (
                             </button>
                         ))}
                     </div>
+
+                    <div className="bg-slate-100/50 p-1 rounded-2xl flex items-center">
+                        {[
+                            { value: 'all', label: 'All Services' },
+                            { value: 'rider', label: 'Riders' },
+                            { value: 'washer', label: 'Washers' }
+                        ].map((srv) => (
+                            <button
+                                key={srv.value}
+                                onClick={() => setServiceFilter(srv.value)}
+                                className={cn(
+                                    "px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all",
+                                    serviceFilter === srv.value
+                                        ? "bg-white text-slate-900 shadow-sm"
+                                        : "text-slate-400 hover:text-slate-600"
+                                )}
+                            >
+                                {srv.label}
+                            </button>
+                        ))}
+                    </div>
+
                     <button className="p-3.5 bg-white ring-1 ring-slate-200 rounded-2xl text-slate-600 hover:text-primary transition-all">
                         <Filter className="h-5 w-5" />
                     </button>
@@ -215,7 +247,15 @@ return (
                                                className="h-12 w-12 rounded-lg bg-gray-100 ring-2 ring-white shadow-sm object-cover group-hover:scale-110 transition-all" 
                                             />
                                             <div>
-                                                <p className="text-sm font-black text-slate-900">{rider.name}</p>
+                                                <div className="flex items-center gap-2">
+                                                    <p className="text-sm font-black text-slate-900">{rider.name}</p>
+                                                    {rider.isCarWashService && (
+                                                        <Badge variant="info" className="text-[8px] font-black uppercase px-1.5 py-0.5">Washer</Badge>
+                                                    )}
+                                                    {rider.isParcelService && (
+                                                        <Badge variant="primary" className="text-[8px] font-black uppercase px-1.5 py-0.5">Rider</Badge>
+                                                    )}
+                                                </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Phone className="h-3 w-3 text-slate-400" />
                                                     <span className="text-[10px] font-bold text-slate-500">{rider.phone}</span>
@@ -310,12 +350,29 @@ return (
                                     </div>
                                 </div>
                                 <div className="space-y-1">
-                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Experience</p>
-                                    <div className="flex items-center gap-2 text-slate-700">
-                                        <Calendar className="h-4 w-4 text-slate-400" />
-                                        <span className="text-xs font-bold">{viewingRider.experience}</span>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Registered Services</p>
+                                    <div className="flex flex-wrap gap-1.5 mt-1">
+                                        {viewingRider.isParcelService && (
+                                            <Badge variant="primary" className="text-[9px] font-black uppercase">Parcel Delivery</Badge>
+                                        )}
+                                        {viewingRider.isCarWashService && (
+                                            <Badge variant="info" className="text-[9px] font-black uppercase">Car Wash Service</Badge>
+                                        )}
                                     </div>
                                 </div>
+                                {viewingRider.isCarWashService && (
+                                    <div className="space-y-1 pt-4 border-t border-slate-100">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Detailing Experience</p>
+                                        <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 mt-1">
+                                            <p className="text-xs font-black text-slate-800">{viewingRider.experience || "Not Specified"}</p>
+                                            {viewingRider.experienceDetails && (
+                                                <p className="text-[10px] font-bold text-slate-500 mt-1 leading-relaxed">
+                                                    {viewingRider.experienceDetails}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                                 <div className="pt-6 border-t border-slate-200">
                                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">System Confidence</p>
                                     <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
@@ -376,43 +433,65 @@ return (
                             <div className="space-y-4 mb-14">
                                 <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Submitted Documents ({viewingRider.documents.length})</h4>
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                    {viewingRider.documents.map((doc, idx) => (
-                                        <div key={idx} className="group relative aspect-[4/3] bg-slate-100 rounded-[24px] overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all">
-                                            <div className="absolute inset-0 flex flex-col items-center justify-center p-4">
-                                                <FileSearch className="h-8 w-8 text-slate-400 group-hover:text-primary transition-colors" />
-                                                <p className="text-[9px] font-black text-slate-500 uppercase mt-2 text-center">{doc}</p>
-                                            </div>
-                                            <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/5 transition-colors" />
-                                        </div>
-                                    ))}
+                                    {viewingRider.documents.map((doc, idx) => {
+                                        const isObj = doc && typeof doc === 'object';
+                                        const docKey = isObj ? (doc.name || '') : doc;
+                                        const docUrl = isObj ? doc.url : (viewingRider.documentsRaw?.[docKey] || '');
+                                        const docName = docKey.toUpperCase();
+                                        return (
+                                            <a 
+                                                key={idx} 
+                                                href={docUrl} 
+                                                target="_blank" 
+                                                rel="noreferrer" 
+                                                className="group relative aspect-[4/3] bg-slate-50 rounded-[24px] border border-slate-100 overflow-hidden cursor-pointer hover:border-primary transition-all flex flex-col items-center justify-center"
+                                            >
+                                                {docUrl ? (
+                                                    <img 
+                                                        src={docUrl} 
+                                                        alt={docName} 
+                                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                                    />
+                                                ) : (
+                                                    <FileSearch className="h-8 w-8 text-slate-400 group-hover:text-primary transition-colors" />
+                                                )}
+                                                <div className="absolute inset-x-0 bottom-0 bg-slate-900/60 backdrop-blur-sm py-1.5 px-3 flex items-center justify-between">
+                                                    <span className="text-[9px] font-black text-white uppercase tracking-wider">{docName}</span>
+                                                    <span className="text-[8px] font-bold text-primary-light uppercase">Click to Zoom</span>
+                                                </div>
+                                            </a>
+                                        );
+                                    })}
                                 </div>
                             </div>
 
-                            <div className="flex flex-col sm:flex-row gap-4">
-                                <button
-                                    disabled={isProcessing}
-                                    onClick={() => handleApprove(viewingRider.id)}
-                                    className="flex-1 py-5 bg-slate-900 text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                                >
-                                    {isProcessing ? (
-                                        <>
-                                            <div className="h-4 w-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                                            Processing Verification...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Check className="h-4 w-4" />
-                                            APPROVE & ACTIVATE RIDER
-                                        </>
-                                    )}
-                                </button>
-                                <button
-                                    onClick={() => handleReject(viewingRider.id)}
-                                    className="py-5 px-5 bg-rose-50 text-rose-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-rose-100 transition-all active:scale-95"
-                                >
-                                    REJECT APPLICATION
-                                </button>
-                            </div>
+                            {viewingRider.status === 'pending_review' && (
+                                <div className="flex flex-col sm:flex-row gap-4">
+                                    <button
+                                        disabled={isProcessing}
+                                        onClick={() => handleApprove(viewingRider.id)}
+                                        className="flex-1 py-5 bg-slate-900 text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+                                    >
+                                        {isProcessing ? (
+                                            <>
+                                                <div className="h-4 w-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                                                Processing Verification...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Check className="h-4 w-4" />
+                                                APPROVE & ACTIVATE RIDER
+                                            </>
+                                        )}
+                                    </button>
+                                    <button
+                                        onClick={() => handleReject(viewingRider.id)}
+                                        className="py-5 px-5 bg-rose-50 text-rose-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-rose-100 transition-all active:scale-95"
+                                    >
+                                        REJECT APPLICATION
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </motion.div>
                 </div>

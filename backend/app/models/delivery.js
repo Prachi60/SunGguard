@@ -70,6 +70,16 @@ const deliverySchema = new mongoose.Schema(
             trim: true,
         },
 
+        experience: {
+            type: String,
+            trim: true,
+        },
+
+        experienceDetails: {
+            type: String,
+            trim: true,
+        },
+
         isVerified: {
             type: Boolean,
             default: false,
@@ -84,6 +94,10 @@ const deliverySchema = new mongoose.Schema(
         isParcelService: {
             type: Boolean,
             default: true,
+        },
+        isCarWashService: {
+            type: Boolean,
+            default: false,
         },
         isBusy: {
             type: Boolean,

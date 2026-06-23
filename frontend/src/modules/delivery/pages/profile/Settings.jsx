@@ -1,12 +1,15 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Bell, Smartphone, Moon, Globe, ChevronRight } from "lucide-react";
+import { ArrowLeft, Bell, Smartphone, Moon, Globe, ChevronRight, Truck, Sparkles } from "lucide-react";
 import Button from "@/shared/components/ui/Button";
 import Card from "@/shared/components/ui/Card";
 import { toast } from "sonner";
+import { useAuth } from "@core/context/AuthContext";
+import { deliveryApi } from "../../services/deliveryApi";
 
 const Settings = () => {
   const navigate = useNavigate();
+  const { user, refreshUser } = useAuth();
 
   const [settings, setSettings] = useState({
     pushNotifications: true,
@@ -20,6 +23,21 @@ const Settings = () => {
   const toggleSetting = (key) => {
     setSettings((prev) => ({ ...prev, [key]: !prev[key] }));
     toast.success("Settings updated");
+  };
+
+  const handleToggleService = async (serviceKey, currentValue) => {
+    try {
+      const payload = { [serviceKey]: !currentValue };
+      const response = await deliveryApi.updateProfile(payload);
+      if (response.data.success) {
+        await refreshUser();
+        toast.success("Service preferences updated successfully!");
+      } else {
+        toast.error(response.data.message || "Failed to update service preferences");
+      }
+    } catch (error) {
+      toast.error("Failed to update preferences");
+    }
   };
 
   return (
@@ -38,6 +56,44 @@ const Settings = () => {
       </div>
 
       <div className="p-4 max-w-lg mx-auto space-y-6">
+        {/* Services Preferences */}
+        <section>
+          <h2 className="text-sm uppercase font-bold text-gray-500 mb-3 tracking-wider ml-1">Services Settings</h2>
+          <Card className="divide-y divide-gray-100">
+            <div 
+              className="p-4 flex justify-between items-center cursor-pointer" 
+              onClick={() => handleToggleService('isParcelService', user?.isParcelService)}
+            >
+              <div className="flex items-center">
+                <Truck size={20} className="text-brand-600 mr-3 animate-pulse" />
+                <div>
+                  <h4 className="font-semibold text-gray-800">Deliver Parcels</h4>
+                  <p className="text-xs text-gray-400">Receive courier/parcel pick-ups & drops</p>
+                </div>
+              </div>
+              <div className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 ease-in-out ${user?.isParcelService ? 'bg-primary' : 'bg-gray-300'}`}>
+                <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-200 ease-in-out ${user?.isParcelService ? 'translate-x-6' : 'translate-x-0'}`} />
+              </div>
+            </div>
+
+            <div 
+              className="p-4 flex justify-between items-center cursor-pointer" 
+              onClick={() => handleToggleService('isCarWashService', user?.isCarWashService)}
+            >
+              <div className="flex items-center">
+                <Sparkles size={20} className="text-cyan-600 mr-3" />
+                <div>
+                  <h4 className="font-semibold text-gray-800">Doorstep Car Wash</h4>
+                  <p className="text-xs text-gray-400">Receive local vehicle wash requests</p>
+                </div>
+              </div>
+              <div className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 ease-in-out ${user?.isCarWashService ? 'bg-primary' : 'bg-gray-300'}`}>
+                <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-200 ease-in-out ${user?.isCarWashService ? 'translate-x-6' : 'translate-x-0'}`} />
+              </div>
+            </div>
+          </Card>
+        </section>
+
         {/* Notifications */}
         <section>
           <h2 className="text-sm uppercase font-bold text-gray-500 mb-3 tracking-wider ml-1">Notifications</h2>

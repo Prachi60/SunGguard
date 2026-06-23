@@ -473,7 +473,7 @@ const Dashboard = () => {
                 </div>
               )}
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
       </div>
     </div>

@@ -84,7 +84,7 @@ function CategoryNavColumn({
       style={{
         borderBottomColor: isActive ? "transparent" : categoryAccent,
       }}
-      className="relative z-[2] flex min-w-[48px] shrink-0 cursor-pointer flex-col items-center gap-0.5 border-b-2 px-2 pb-0.5 pt-0.5 snap-start md:min-w-[58px]">
+      className="relative z-[2] flex flex-1 min-w-0 cursor-pointer flex-col items-center gap-0.5 border-b-2 px-1 sm:px-2 pb-0.5 pt-0.5">
       <div className="relative z-10 flex h-9 w-9 items-center justify-center md:h-11 md:w-11">
         {typeof cat.icon === "function" ||
         (typeof cat.icon === "object" && cat.icon.$$typeof) ? (
@@ -110,7 +110,7 @@ function CategoryNavColumn({
         <span
           ref={labelRef}
           className={cn(
-            "relative z-10 mx-auto block max-w-[72px] truncate px-1 pb-0.5 text-center text-[8px] uppercase tracking-tight md:max-w-[88px] md:text-[10px]",
+            "relative z-10 mx-auto block w-full max-w-full truncate px-0.5 pb-0.5 text-center text-[8px] uppercase tracking-tight md:text-[10px]",
             isActive ? "font-black" : "font-semibold",
           )}
           style={{
@@ -571,7 +571,7 @@ const MainLocationHeader = ({
                 display: displayNav,
                 overflowY: "hidden",
               }}
-              className="relative flex items-end md:justify-center gap-0 overflow-x-auto no-scrollbar -mx-2 px-2 md:mx-0 md:px-0 z-10 snap-x pt-1 min-h-[68px] md:min-h-[76px] pb-0.5">
+              className="relative flex w-full items-end justify-between gap-0 z-10 pt-1 min-h-[68px] md:min-h-[76px] pb-0.5 px-0">
               {categories.slice(0, 10).map((cat) => {
                 const isActive = activeCategory?.id === cat.id;
                 return (

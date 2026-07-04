@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   MapPin,
   Sparkles,
@@ -33,8 +33,10 @@ const CarWashBookingPage = () => {
   const { user } = useAuth();
   const { currentLocation } = useLocation();
   const navigate = useNavigate();
-  
-  const [activeTab, setActiveTab] = useState("book"); // 'book' or 'history'
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get("tab") === "history" ? "history" : "book";
+
+  const [activeTab, setActiveTab] = useState(initialTab); // 'book' or 'history'
   const [loading, setLoading] = useState(false);
   const [packages, setPackages] = useState([]);
   const [history, setHistory] = useState([]);
@@ -103,6 +105,22 @@ const CarWashBookingPage = () => {
     fetchPackages();
     fetchHistory();
   }, [fetchPackages, fetchHistory]);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab") === "history" ? "history" : "book";
+    setActiveTab(tab);
+    if (tab === "history") fetchHistory();
+  }, [searchParams, fetchHistory]);
+
+  const switchTab = (tab) => {
+    setActiveTab(tab);
+    if (tab === "history") {
+      fetchHistory();
+      setSearchParams({ tab: "history" }, { replace: true });
+    } else {
+      setSearchParams({}, { replace: true });
+    }
+  };
 
   // Handle Dynamic Fare Calculation
   useEffect(() => {
@@ -204,7 +222,7 @@ const CarWashBookingPage = () => {
         </div>
         <div className="flex gap-2 bg-white/10 p-1.5 rounded-2xl backdrop-blur-sm self-stretch md:self-auto justify-center">
           <button
-            onClick={() => { setActiveTab("book"); }}
+            onClick={() => switchTab("book")}
             className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
               activeTab === "book"
                 ? "bg-white text-cyan-600 shadow-md"
@@ -214,7 +232,7 @@ const CarWashBookingPage = () => {
             <Zap size={16} /> Book Service
           </button>
           <button
-            onClick={() => { setActiveTab("history"); fetchHistory(); }}
+            onClick={() => switchTab("history")}
             className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
               activeTab === "history"
                 ? "bg-white text-cyan-600 shadow-md"
@@ -514,7 +532,7 @@ const CarWashBookingPage = () => {
                 You haven't requested any doorstep washes yet. Create your first booking today!
               </p>
               <button
-                onClick={() => setActiveTab("book")}
+                onClick={() => switchTab("book")}
                 className="px-6 py-2.5 bg-cyan-600 text-white font-bold text-sm rounded-xl hover:bg-cyan-700 transition-all border-none"
               >
                 Book a Wash

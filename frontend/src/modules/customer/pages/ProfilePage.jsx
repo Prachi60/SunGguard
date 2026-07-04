@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
     User, MapPin, Package, CreditCard, Wallet, ChevronRight,
-    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, Sparkles
+    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, Sparkles, Car, History
 } from 'lucide-react';
 import { useAuth } from '@core/context/AuthContext';
 import { useSettings } from '@core/context/SettingsContext';
@@ -157,6 +157,22 @@ const ProfilePage = () => {
                                 path="/orders"
                                 color="var(--primary)"
                                 bg="rgba(16,185,129,0.10)"
+                            />
+                            <MenuItem
+                                icon={History}
+                                label="Parcel History"
+                                sub="Track parcel deliveries & past requests"
+                                path="/parcel?tab=history"
+                                color="#0ea5e9"
+                                bg="rgba(14,165,233,0.10)"
+                            />
+                            <MenuItem
+                                icon={Car}
+                                label="Car Wash History"
+                                sub="View past and active wash bookings"
+                                path="/car-wash?tab=history"
+                                color="#0891b2"
+                                bg="rgba(8,145,178,0.10)"
                             />
                             <MenuItem
                                 icon={CreditCard}

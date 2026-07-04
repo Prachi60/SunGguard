@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   MapPin,
   Package,
@@ -145,7 +145,9 @@ const LiveTrackingMap = ({ pickupAddress, dropAddress, deliveryPartner }) => {
 const ParcelDeliveryPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('book'); // 'book' or 'history'
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get("tab") === "history" ? "history" : "book";
+  const [activeTab, setActiveTab] = useState(initialTab); // 'book' or 'history'
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   
@@ -242,6 +244,26 @@ const ParcelDeliveryPage = () => {
     fetchHistory();
     fetchBookingConfig();
   }, [fetchHistory, fetchBookingConfig]);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab") === "history" ? "history" : "book";
+    setActiveTab(tab);
+    if (tab === "history") {
+      setTrackingParcel(null);
+      fetchHistory();
+    }
+  }, [searchParams, fetchHistory]);
+
+  const switchTab = (tab) => {
+    setActiveTab(tab);
+    setTrackingParcel(null);
+    if (tab === "history") {
+      fetchHistory();
+      setSearchParams({ tab: "history" }, { replace: true });
+    } else {
+      setSearchParams({}, { replace: true });
+    }
+  };
 
   // Handle Fare Calculation when locations or weight change
   useEffect(() => {
@@ -434,7 +456,7 @@ const ParcelDeliveryPage = () => {
           </div>
           <div className="flex gap-2 bg-white/10 p-1.5 rounded-2xl backdrop-blur-sm self-stretch md:self-auto justify-center">
             <button
-              onClick={() => { setActiveTab('book'); setTrackingParcel(null); }}
+              onClick={() => switchTab('book')}
               className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
                 activeTab === 'book' && !trackingParcel
                   ? 'bg-white text-primary shadow-md'
@@ -444,7 +466,7 @@ const ParcelDeliveryPage = () => {
               <Truck size={16} /> Book
             </button>
             <button
-              onClick={() => { setActiveTab('history'); setTrackingParcel(null); fetchHistory(); }}
+              onClick={() => switchTab('history')}
               className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
                 activeTab === 'history' || trackingParcel
                   ? 'bg-white text-primary shadow-md'
@@ -459,13 +481,13 @@ const ParcelDeliveryPage = () => {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-5 p-2">
           <div className="grid grid-cols-2 gap-2">
             <button
-              onClick={() => { setActiveTab('book'); setTrackingParcel(null); }}
+              onClick={() => switchTab('book')}
               className="px-3 py-2 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 text-slate-600 hover:bg-slate-100"
             >
               <Truck size={16} /> Book
             </button>
             <button
-              onClick={() => { setActiveTab('history'); setTrackingParcel(null); fetchHistory(); }}
+              onClick={() => switchTab('history')}
               className="px-3 py-2 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 bg-slate-900 text-white"
             >
               <History size={16} /> History & Status
@@ -611,13 +633,13 @@ const ParcelDeliveryPage = () => {
                   <Package className="text-primary" size={20} /> Package Details
                 </h2>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-3">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-500 uppercase">Package Type</label>
                     <select
                       value={packageType}
                       onChange={(e) => setPackageType(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white outline-none focus:border-primary"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm bg-white outline-none focus:border-primary"
                     >
                       {packageTypes.map((type) => (
                         <option key={type.value} value={type.value}>
@@ -626,11 +648,12 @@ const ParcelDeliveryPage = () => {
                       ))}
                     </select>
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-500 uppercase">
                       Weight (Max {weightUnit === "gm" ? `${Math.round(maxWeightKg * 1000)} gm` : `${maxWeightKg} KG`})
                     </label>
-                    <div className="flex gap-2">
+                    <div className="flex items-stretch gap-2 w-full">
                       <input
                         type="text"
                         inputMode="decimal"
@@ -653,7 +676,7 @@ const ParcelDeliveryPage = () => {
                           }
                           setWeightInput(next);
                         }}
-                        className="flex-1 min-w-0 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                        className="flex-1 min-w-[140px] w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-base font-semibold text-slate-900 outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                       />
                       <select
                         value={weightUnit}
@@ -672,7 +695,7 @@ const ParcelDeliveryPage = () => {
                           }
                           setWeightUnit(nextUnit);
                         }}
-                        className="w-[88px] shrink-0 rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold text-slate-700 outline-none focus:border-primary bg-white"
+                        className="w-[96px] shrink-0 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-primary bg-white"
                       >
                         <option value="kg">KG</option>
                         <option value="gm">GM</option>
@@ -807,7 +830,7 @@ const ParcelDeliveryPage = () => {
                 You haven't requested any parcel deliveries yet. Create your first request above!
               </p>
               <button
-                onClick={() => setActiveTab('book')}
+                onClick={() => switchTab('book')}
                 className="px-6 py-2.5 bg-primary text-white font-bold text-sm rounded-xl hover:bg-primary-dark transition-all"
               >
                 Book a Delivery

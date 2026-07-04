@@ -21,6 +21,7 @@ import {
   startReturnPickupBroadcast,
   removeReturnPickupTimeoutJob,
 } from "../services/orderWorkflowService.js";
+import { markDeliveryPartnerBusy } from "../services/deliveryBusyService.js";
 import { applyDeliveredSettlement } from "../services/orderSettlement.js";
 import {
   freezeFinancialSnapshot,
@@ -834,6 +835,17 @@ export const acceptReturnPickup = async (req, res) => {
       return handleResponse(res, 403, "Access denied.");
     }
 
+    if (role === "delivery") {
+      const partner = await Delivery.findById(userId).select("isVerified").lean();
+      if (!partner?.isVerified) {
+        return handleResponse(
+          res,
+          403,
+          "Your account is pending admin approval.",
+        );
+      }
+    }
+
     const orderKey = orderMatchQueryFromRouteParam(orderId);
     const order = await Order.findOne(orderKey);
 
@@ -885,6 +897,7 @@ export const acceptReturnPickup = async (req, res) => {
         deliveryId: userId,
         data: { message: "A delivery partner has accepted your return pickup!" },
       });
+      await markDeliveryPartnerBusy(userId);
     }
 
     return handleResponse(res, 200, "Return pickup accepted", order);
@@ -1328,6 +1341,17 @@ export const acceptOrder = async (req, res) => {
       return handleResponse(res, 403, "Access denied.");
     }
 
+    if (role === "delivery") {
+      const partner = await Delivery.findById(userId).select("isVerified").lean();
+      if (!partner?.isVerified) {
+        return handleResponse(
+          res,
+          403,
+          "Your account is pending admin approval.",
+        );
+      }
+    }
+
     const orderKey = orderMatchQueryFromRouteParam(orderId);
     if (!orderKey) {
       return handleResponse(res, 404, "Order not found");
@@ -1372,6 +1396,7 @@ export const acceptOrder = async (req, res) => {
     }
 
     await order.save();
+    await markDeliveryPartnerBusy(userId);
     emitNotificationEvent(NOTIFICATION_EVENTS.DELIVERY_ASSIGNED, {
       orderId: order.orderId,
       deliveryId: userId,

@@ -28,7 +28,7 @@ import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from "@react-go
 
 const CarWashMap = ({ address, status }) => {
   const { isLoaded } = useJsApiLoader({
-    id: "google-map-script-partner-wash-tracking",
+    id: "google-map-script",
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     libraries: ["places"],
   });

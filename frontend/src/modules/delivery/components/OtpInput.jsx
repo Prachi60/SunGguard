@@ -19,13 +19,13 @@ import { deliveryApi } from "../services/deliveryApi";
  * @param {Function} props.onCancel - Optional callback for cancel action
  */
 const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, onError, onCancel }) => {
-  const [otp, setOtp] = useState(["", "", "", ""]);
+  const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState(null);
   const [lastErrorCode, setLastErrorCode] = useState(null);
   const [attemptsRemaining, setAttemptsRemaining] = useState(3);
-  const inputRefs = [useRef(null), useRef(null), useRef(null), useRef(null)];
+  const inputRefs = [useRef(null), useRef(null), useRef(null), useRef(null), useRef(null), useRef(null)];
 
   // Auto-focus first input on mount
   useEffect(() => {
@@ -36,7 +36,7 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
 
   // Reset component when orderId changes
   useEffect(() => {
-    setOtp(["", "", "", ""]);
+    setOtp(["", "", "", "", "", ""]);
     setError(null);
     setLastErrorCode(null);
     setAttemptsRemaining(3);
@@ -64,7 +64,7 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
     setError(null);
 
     // Auto-focus next field if digit entered
-    if (value && index < 3) {
+    if (value && index < 5) {
       inputRefs[index + 1].current?.focus();
     }
   };
@@ -86,13 +86,13 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
     e.preventDefault();
     const pastedData = e.clipboardData.getData("text").trim();
 
-    // Only accept 4-digit numeric paste
-    if (/^\d{4}$/.test(pastedData)) {
+    // Only accept 6-digit numeric paste
+    if (/^\d{6}$/.test(pastedData)) {
       const newOtp = pastedData.split("");
       setOtp(newOtp);
       setError(null);
       // Focus last input
-      inputRefs[3].current?.focus();
+      inputRefs[5].current?.focus();
     }
   };
 
@@ -101,7 +101,7 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
    * Requirement 6.5: Clear input fields after failed validation
    */
   const clearInputs = () => {
-    setOtp(["", "", "", ""]);
+    setOtp(["", "", "", "", "", ""]);
     setError(null);
     inputRefs[0].current?.focus();
   };
@@ -139,8 +139,8 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
     const otpString = otp.join("");
 
     // Validate OTP format before submission
-    if (otpString.length !== 4) {
-      setError("Please enter all 4 digits");
+    if (otpString.length !== 6) {
+      setError("Please enter all 6 digits");
       return;
     }
 
@@ -211,8 +211,8 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
           duration: 6000,
         });
       } else if (errorCode === "OTP_INVALID_FORMAT") {
-        setError("Invalid OTP format. Please enter 4 digits.");
-        toast.error("Invalid OTP format. Please enter 4 digits.");
+        setError("Invalid OTP format. Please enter 6 digits.");
+        toast.error("Invalid OTP format. Please enter 6 digits.");
         clearInputs();
       } else if (errorCode === "OTP_NOT_FOUND") {
         setError("No active OTP found. Please generate one first.");
@@ -242,8 +242,8 @@ const OtpInput = ({ orderId, isReturn = false, isReturnDrop = false, onSuccess, 
         </h3>
         <p className="text-sm text-gray-600">
           {isReturnDrop
-            ? "Ask the seller for the 4-digit return confirmation code"
-            : "Ask the customer for the 4-digit code"}
+            ? "Ask the seller for the 6-digit return confirmation code"
+            : "Ask the customer for the 6-digit code"}
         </p>
       </div>
 

@@ -4,6 +4,7 @@
 import { verifySocketToken } from "./socketAuth.js";
 import mongoose from "mongoose";
 import Ticket from "../models/ticket.js";
+import Delivery from "../models/delivery.js";
 
 let _io = null;
 
@@ -38,8 +39,12 @@ export const initSocket = (io) => {
     if (role === "delivery") {
       const dId = userId.toString();
       deliverySockets.set(dId, socket.id);
-      socket.join("delivery:online");
       socket.join(`delivery:${dId}`);
+      Delivery.findById(dId).select("isVerified").lean().then((partner) => {
+        if (partner?.isVerified) {
+          socket.join("delivery:online");
+        }
+      }).catch(() => {});
     }
     if (role === "seller") {
       socket.join(`seller:${userId}`);

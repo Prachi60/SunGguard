@@ -64,6 +64,13 @@ body {
   touch-action: manipulation; /* Faster taps */
 }
 
+/* Keep typography consistent across all native elements */
+*,
+*::before,
+*::after {
+  font-family: inherit;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

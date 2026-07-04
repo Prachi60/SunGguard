@@ -115,7 +115,7 @@ const ActiveSellerMap = ({
 }) => {
   const mapRef = useRef(null);
   const { isLoaded: mapLoaded, loadError: mapLoadError } = useJsApiLoader({
-    id: "admin-seller-locations-map",
+    id: "google-map-script",
     googleMapsApiKey: googleMapApiKey,
     libraries: MAP_LIBRARIES,
   });

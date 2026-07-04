@@ -1,4 +1,6 @@
 const MOCK_OTP = "1234";
+/** Fixed parcel delivery OTP while USE_REAL_SMS is not enabled. */
+const PARCEL_MOCK_OTP = "123456";
 
 export const useRealSMS = () =>
   process.env.USE_REAL_SMS === "true" || process.env.USE_REAL_SMS === "1";
@@ -21,4 +23,12 @@ export const generateOTP = () => {
   return useRealSMS() ? randomOtp(OTP_LENGTH) : MOCK_OTP;
 };
 
-export { MOCK_OTP };
+/** 6-digit parcel delivery OTP. Mock `123456` until USE_REAL_SMS=true. */
+export const generateParcelOtp = () => {
+  if (useRealSMS()) {
+    return randomOtp(6);
+  }
+  return PARCEL_MOCK_OTP;
+};
+
+export { MOCK_OTP, PARCEL_MOCK_OTP };

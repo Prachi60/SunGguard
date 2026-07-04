@@ -9,6 +9,10 @@ import {
 } from "../utils/orderLookup.js";
 import { buildKey, getOrSet, getTTL } from "./cacheService.js";
 import { resolveWorkflowStatus } from "./orderWorkflowService.js";
+import {
+  deliveryPartnerHasActiveJob,
+  markDeliveryPartnerBusy,
+} from "./deliveryBusyService.js";
 import logger from "./logger.js";
 
 function svcErr(message, statusCode) {
@@ -280,6 +284,29 @@ export async function fetchAvailableOrdersForDelivery({
   }
 
   const deliveryPartner = await Delivery.findById(userId);
+  if (!deliveryPartner?.isVerified) {
+    return {
+      requiresLocation: false,
+      orders: [],
+      limit,
+      pendingApproval: true,
+    };
+  }
+
+  const hasActiveJob =
+    deliveryPartner.isBusy || (await deliveryPartnerHasActiveJob(userId));
+  if (hasActiveJob) {
+    if (!deliveryPartner.isBusy) {
+      await markDeliveryPartnerBusy(userId);
+    }
+    return {
+      requiresLocation: false,
+      orders: [],
+      limit,
+      busy: true,
+    };
+  }
+
   if (
     !deliveryPartner ||
     !deliveryPartner.location ||

@@ -12,6 +12,9 @@ import {
   onDeliveryBroadcast,
   onDeliveryBroadcastWithdrawn,
   onParcelAssigned,
+  onParcelBroadcast,
+  onParcelBroadcastWithdrawn,
+  onDeliveryOtpValidated,
 } from "@/core/services/orderSocket";
 import { parcelApi } from "../../customer/services/parcelApi";
 import {
@@ -32,22 +35,46 @@ function secondsLeftUntilDeliveryExpiry(expiresAt) {
   return Math.max(0, Math.ceil(ms / 1000));
 }
 
+/** Match server parcel `searchExpiresAt`. */
+function secondsLeftUntilParcelExpiry(expiresAt) {
+  if (!expiresAt) return 60;
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  return Math.max(0, Math.ceil(ms / 1000));
+}
+
 const DeliveryLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
+  const canReceiveOrders = Boolean(user?.isVerified) && user?.isOnline === true;
+  const canReceiveParcelBroadcast =
+    canReceiveOrders && Boolean(user?.isParcelService);
 
   const [activeOrder, setActiveOrder] = useState(null);
   const [activeParcel, setActiveParcel] = useState(null);
+  const [activeParcelOffer, setActiveParcelOffer] = useState(null);
   const [timeLeft, setTimeLeft] = useState(60);
+  const [parcelTimeLeft, setParcelTimeLeft] = useState(60);
   const [acceptWindowTotal, setAcceptWindowTotal] = useState(60);
+  const [parcelAcceptWindowTotal, setParcelAcceptWindowTotal] = useState(60);
   const shownOrderIdsRef = useRef(new Set());
+  const shownParcelIdsRef = useRef(new Set());
   const activeOrderRef = useRef(null);
   const activeParcelRef = useRef(null);
+  const activeParcelOfferRef = useRef(null);
+  const riderOnJobRef = useRef(Boolean(user?.isBusy));
+
+  useEffect(() => {
+    riderOnJobRef.current = Boolean(user?.isBusy);
+  }, [user?.isBusy]);
 
   useEffect(() => {
     activeParcelRef.current = activeParcel;
   }, [activeParcel]);
+
+  useEffect(() => {
+    activeParcelOfferRef.current = activeParcelOffer;
+  }, [activeParcelOffer]);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [availableOrdersCount, setAvailableOrdersCount] = useState(0);
   const [isAcceptingOrder, setIsAcceptingOrder] = useState(false);
@@ -79,7 +106,7 @@ const DeliveryLayout = () => {
 
     if (!ringtoneRetryTimerRef.current) {
       ringtoneRetryTimerRef.current = setInterval(() => {
-        if (!activeOrderRef.current && !activeParcelRef.current) return;
+        if (!activeOrderRef.current && !activeParcelRef.current && !activeParcelOfferRef.current) return;
         const currentAudio = getOrderRingtone();
         if (!currentAudio.paused) return;
         currentAudio.play().catch(() => { });
@@ -92,7 +119,7 @@ const DeliveryLayout = () => {
       typeof document !== "undefined"
     ) {
       const unlockPlayback = () => {
-        if (!activeOrderRef.current && !activeParcelRef.current) return;
+        if (!activeOrderRef.current && !activeParcelRef.current && !activeParcelOfferRef.current) return;
         const currentAudio = getOrderRingtone();
         if (!currentAudio.paused) return;
         currentAudio.play().catch(() => { });
@@ -133,20 +160,42 @@ const DeliveryLayout = () => {
     activeOrderRef.current = activeOrder;
   }, [activeOrder]);
 
-  /** While working an active order, do not stack the global incoming-offer modal (fixes refresh on order details). */
+  /** While working an active order, do not stack the global incoming-offer modal. */
   const suppressIncomingModal = useMemo(
     () =>
-      /\/delivery\/(confirm-delivery|navigation)/.test(location.pathname),
+      /\/delivery\/(confirm-delivery|navigation|order-details)/.test(location.pathname),
     [location.pathname],
   );
 
+  const shouldBlockIncomingOffers = useCallback(() => {
+    return (
+      riderOnJobRef.current ||
+      Boolean(user?.isBusy) ||
+      Boolean(activeOrderRef.current) ||
+      Boolean(activeParcelRef.current) ||
+      Boolean(activeParcelOfferRef.current) ||
+      suppressIncomingModal
+    );
+  }, [user?.isBusy, suppressIncomingModal]);
+
   useEffect(() => {
-    loadHandledIncomingOrderIds().forEach((id) => shownOrderIdsRef.current.add(id));
-  }, []);
+    if (!canReceiveOrders) return undefined;
+    refreshUser().catch(() => {});
+  }, [canReceiveOrders, refreshUser]);
+
+  useEffect(() => {
+    if (user?.isVerified) return;
+    acceptInFlightRef.current = false;
+    setIsAcceptingOrder(false);
+    stopOrderRingtone();
+    setActiveOrder(null);
+    setActiveParcel(null);
+    setActiveParcelOffer(null);
+  }, [user?.isVerified]);
 
   const applyFromBroadcastPayload = useCallback((payload) => {
     if (!payload?.orderId) return false;
-    if (activeOrderRef.current) return true;
+    if (riderOnJobRef.current || user?.isBusy || activeOrderRef.current) return true;
     if (shownOrderIdsRef.current.has(payload.orderId)) return true;
     const p = payload.preview;
     if (
@@ -179,11 +228,100 @@ const DeliveryLayout = () => {
       items: payload.items || [],
     });
     return true;
-  }, []);
+  }, [user?.isBusy]);
+
+  const applyFromParcelBroadcastPayload = useCallback((payload) => {
+    if (!payload?.parcelId) return false;
+    if (
+      riderOnJobRef.current ||
+      user?.isBusy ||
+      activeOrderRef.current ||
+      activeParcelRef.current ||
+      activeParcelOfferRef.current
+    ) {
+      return true;
+    }
+    if (shownParcelIdsRef.current.has(payload.parcelId)) return true;
+
+    const p = payload.preview;
+    if (!p || typeof p.pickup !== "string" || typeof p.drop !== "string") {
+      return false;
+    }
+
+    const exp = payload.searchExpiresAt;
+    if (exp && secondsLeftUntilParcelExpiry(exp) <= 0) {
+      return false;
+    }
+
+    shownParcelIdsRef.current = new Set(shownParcelIdsRef.current).add(payload.parcelId);
+    const fare = typeof p.fare === "number" ? p.fare : Number(p.fare) || 0;
+    const share = Math.min(100, Math.max(0, Number(p.riderSharePercent) ?? 80)) / 100;
+    const earnings =
+      typeof p.earnings === "number" ? p.earnings : Math.round(fare * share * 100) / 100;
+
+    setActiveParcelOffer({
+      parcelId: payload.parcelId,
+      pickup: p.pickup,
+      drop: p.drop,
+      fare,
+      earnings,
+      riderSharePercent: Number(p.riderSharePercent) || Math.round(share * 100),
+      weight: p.weight,
+      distance: p.distance,
+      expiresAt: payload.searchExpiresAt || null,
+      isBroadcast: true,
+    });
+    return true;
+  }, [user?.isBusy]);
+
+  const applyAvailableParcelsList = useCallback((availableParcels) => {
+    if (
+      riderOnJobRef.current ||
+      user?.isBusy ||
+      activeOrderRef.current ||
+      activeParcelRef.current ||
+      activeParcelOfferRef.current
+    ) {
+      return;
+    }
+    const nextParcel = availableParcels.find((parcel) => {
+      const parcelId = parcel._id?.toString?.() || String(parcel._id);
+      if (shownParcelIdsRef.current.has(parcelId)) return false;
+      if (
+        parcel.searchExpiresAt &&
+        secondsLeftUntilParcelExpiry(parcel.searchExpiresAt) <= 0
+      ) {
+        return false;
+      }
+      return true;
+    });
+    if (!nextParcel) return;
+
+    const parcelId = nextParcel._id?.toString?.() || String(nextParcel._id);
+    shownParcelIdsRef.current = new Set(shownParcelIdsRef.current).add(parcelId);
+    const fare = Number(nextParcel.fare) || 0;
+    const sharePercent = Math.min(100, Math.max(0, Number(nextParcel.riderSharePercent) ?? 80));
+    const share = sharePercent / 100;
+    setActiveParcelOffer({
+      parcelId,
+      pickup: nextParcel.pickupAddress?.fullAddress || "Pickup location",
+      drop: nextParcel.dropAddress?.fullAddress || "Drop location",
+      fare,
+      earnings:
+        typeof nextParcel.earnings === "number"
+          ? nextParcel.earnings
+          : Math.round(fare * share * 100) / 100,
+      riderSharePercent: sharePercent,
+      weight: nextParcel.weight,
+      distance: nextParcel.distance,
+      expiresAt: nextParcel.searchExpiresAt || null,
+      isBroadcast: true,
+    });
+  }, [user?.isBusy]);
 
   const applyAvailableOrdersList = useCallback((availableOrders) => {
     setAvailableOrdersCount(availableOrders.length);
-    if (activeOrderRef.current) return;
+    if (riderOnJobRef.current || user?.isBusy || activeOrderRef.current) return;
     const newOrder = availableOrders.find((o) => {
       if (shownOrderIdsRef.current.has(o.orderId)) return false;
       if (
@@ -216,16 +354,16 @@ const DeliveryLayout = () => {
       isReturnPickup,
       items: newOrder.items || [],
     });
-  }, []);
+  }, [user?.isBusy]);
 
   useEffect(() => {
-    if (activeOrder || activeParcel) {
+    if (activeOrder || activeParcel || activeParcelOffer) {
       startOrderRingtone();
       return undefined;
     }
     stopOrderRingtone();
     return undefined;
-  }, [activeOrder, activeParcel]);
+  }, [activeOrder, activeParcel, activeParcelOffer]);
 
   useEffect(() => {
     return () => {
@@ -236,11 +374,13 @@ const DeliveryLayout = () => {
   const hideBottomNavRoutes = [
     "/delivery/login",
     "/delivery/auth",
+    "/delivery/pending-approval",
     "/delivery/car-wash-auth",
     "/delivery/splash",
     "/delivery/navigation",
     "/delivery/confirm-delivery",
     "/delivery/order-details",
+    "/delivery/parcel-task",
   ];
 
   const shouldShowBottomNav = !hideBottomNavRoutes.some((route) =>
@@ -351,7 +491,7 @@ const DeliveryLayout = () => {
   // back off exponentially up to 60s so a flaky network doesn't hammer
   // the API.
   useEffect(() => {
-    if (!user?.isOnline) {
+    if (!canReceiveOrders) {
       if (availableOrdersRequestRef.current.controller) {
         availableOrdersRequestRef.current.controller.abort();
       }
@@ -367,7 +507,7 @@ const DeliveryLayout = () => {
 
     const tick = async () => {
       if (cancelled) return;
-      if (activeOrderRef.current || suppressIncomingModal) return;
+      if (shouldBlockIncomingOffers()) return;
       if (
         typeof document !== "undefined" &&
         document.visibilityState === "hidden"
@@ -382,6 +522,19 @@ const DeliveryLayout = () => {
           const availableOrders = res.data.results || res.data.result || [];
           applyAvailableOrdersList(availableOrders);
         }
+
+        if (
+          canReceiveParcelBroadcast &&
+          !activeParcelOfferRef.current &&
+          !activeParcelRef.current
+        ) {
+          const parcelRes = await parcelApi.riderGetAvailable();
+          if (!cancelled && parcelRes?.data?.success) {
+            const parcelList = parcelRes.data.results || parcelRes.data.result || [];
+            applyAvailableParcelsList(parcelList);
+          }
+        }
+
         consecutiveErrors = 0;
       } catch (error) {
         if (
@@ -444,10 +597,12 @@ const DeliveryLayout = () => {
       }
     };
   }, [
-    user?.isOnline,
+    canReceiveOrders,
     applyAvailableOrdersList,
-    suppressIncomingModal,
+    applyAvailableParcelsList,
+    shouldBlockIncomingOffers,
     fetchAvailableOrders,
+    canReceiveParcelBroadcast,
   ]);
 
   // Background location heartbeat while the rider is online.
@@ -467,7 +622,7 @@ const DeliveryLayout = () => {
   //     to save battery; resumes on next visible fix.
   useEffect(() => {
     if (
-      !user?.isOnline ||
+      !canReceiveOrders ||
       typeof navigator === "undefined" ||
       !navigator.geolocation
     ) {
@@ -518,14 +673,14 @@ const DeliveryLayout = () => {
         locationRequestRef.current.controller.abort();
       }
     };
-  }, [user?.isOnline, postLocationOnce]);
+  }, [canReceiveOrders, postLocationOnce]);
 
   useEffect(() => {
-    if (!user?.isOnline) return undefined;
+    if (!canReceiveOrders) return undefined;
     const getToken = getDeliveryToken;
     getOrderSocket(getToken);
     return onDeliveryBroadcast(getToken, (payload) => {
-      if (activeOrderRef.current || suppressIncomingModal) return;
+      if (shouldBlockIncomingOffers()) return;
       const opened = applyFromBroadcastPayload(payload);
       if (opened) return;
       fetchAvailableOrders()
@@ -537,15 +692,15 @@ const DeliveryLayout = () => {
         .catch(() => { });
     });
   }, [
-    user?.isOnline,
+    canReceiveOrders,
     applyAvailableOrdersList,
     applyFromBroadcastPayload,
-    suppressIncomingModal,
+    shouldBlockIncomingOffers,
     fetchAvailableOrders,
   ]);
 
   useEffect(() => {
-    if (!user?.isOnline) return undefined;
+    if (!canReceiveOrders) return undefined;
     const getToken = getDeliveryToken;
     return onDeliveryBroadcastWithdrawn(getToken, (payload) => {
       const orderId = payload?.orderId;
@@ -562,17 +717,73 @@ const DeliveryLayout = () => {
         toast.info("Another delivery partner accepted this order.");
       }
     });
-  }, [user?.isOnline]);
+  }, [canReceiveOrders]);
 
   useEffect(() => {
-    if (!user?.isOnline) return undefined;
+    if (!canReceiveParcelBroadcast) return undefined;
+    const getToken = getDeliveryToken;
+    return onParcelBroadcast(getToken, (payload) => {
+      if (shouldBlockIncomingOffers()) return;
+      const opened = applyFromParcelBroadcastPayload(payload);
+      if (opened) return;
+      parcelApi
+        .riderGetAvailable()
+        .then((res) => {
+          if (!res?.data?.success) return;
+          const list = res.data.results || res.data.result || [];
+          applyAvailableParcelsList(list);
+        })
+        .catch(() => {});
+    });
+  }, [
+    canReceiveParcelBroadcast,
+    applyFromParcelBroadcastPayload,
+    applyAvailableParcelsList,
+    shouldBlockIncomingOffers,
+  ]);
+
+  useEffect(() => {
+    if (!canReceiveOrders) return undefined;
+    const getToken = getDeliveryToken;
+    return onDeliveryOtpValidated(getToken, () => {
+      riderOnJobRef.current = false;
+      refreshUser().catch(() => {});
+    });
+  }, [canReceiveOrders, refreshUser]);
+
+  useEffect(() => {
+    if (!canReceiveParcelBroadcast) return undefined;
+    const getToken = getDeliveryToken;
+    return onParcelBroadcastWithdrawn(getToken, (payload) => {
+      const parcelId = payload?.parcelId;
+      if (!parcelId) return;
+
+      shownParcelIdsRef.current = new Set(shownParcelIdsRef.current).add(parcelId);
+
+      if (activeParcelOfferRef.current?.parcelId === parcelId) {
+        acceptInFlightRef.current = false;
+        setIsAcceptingOrder(false);
+        stopOrderRingtone();
+        setActiveParcelOffer(null);
+        toast.info("Another rider accepted this parcel.");
+      }
+    });
+  }, [canReceiveParcelBroadcast, shouldBlockIncomingOffers]);
+
+  useEffect(() => {
+    if (!canReceiveParcelBroadcast) return undefined;
     const getToken = getDeliveryToken;
     return onParcelAssigned(getToken, (parcel) => {
-      console.log("[DeliveryLayout] Received new parcel assignment:", parcel);
-      if (activeOrderRef.current || activeParcelRef.current) return;
-      setActiveParcel(parcel);
+      const parcelId = parcel._id?.toString?.() || String(parcel._id);
+      if (shownParcelIdsRef.current.has(parcelId)) return;
+      if (shouldBlockIncomingOffers()) return;
+      setActiveParcel(null);
+      setActiveParcelOffer(null);
+      stopOrderRingtone();
+      toast.success("Parcel assigned. Continue with pickup workflow.");
+      navigate(`/delivery/parcel-task/${parcelId}`);
     });
-  }, [user?.isOnline]);
+  }, [canReceiveParcelBroadcast, shouldBlockIncomingOffers, navigate]);
 
   // Notifications safety-net polling.
   //
@@ -581,7 +792,7 @@ const DeliveryLayout = () => {
   // notifications inbox. If both real-time channels miss a broadcast, the
   // unread notification row eventually surfaces the offer here.
   useEffect(() => {
-    if (!user?.isOnline) {
+    if (!canReceiveOrders) {
       if (notificationsRequestRef.current.controller) {
         notificationsRequestRef.current.controller.abort();
       }
@@ -597,7 +808,7 @@ const DeliveryLayout = () => {
 
     const tick = async () => {
       if (cancelled) return;
-      if (activeOrderRef.current || suppressIncomingModal) return;
+      if (shouldBlockIncomingOffers()) return;
       if (
         typeof document !== "undefined" &&
         document.visibilityState === "hidden"
@@ -610,8 +821,19 @@ const DeliveryLayout = () => {
         if (cancelled || !res?.data?.success) return;
         const result = res.data.result || res.data.data;
         const notifications = result?.notifications || [];
-        if (activeOrderRef.current) return;
+        if (shouldBlockIncomingOffers()) return;
         for (const n of notifications) {
+          if (n.type === "parcel" && !n.isRead && n.data?.parcelId) {
+            const parcelId = n.data.parcelId;
+            if (shownParcelIdsRef.current.has(parcelId)) continue;
+            const fromParcel = applyFromParcelBroadcastPayload({
+              parcelId,
+              preview: n.data.preview,
+              searchExpiresAt: n.data.searchExpiresAt,
+            });
+            if (fromParcel) return;
+          }
+
           const isIncomingOrderType =
             n.type === "order" || n.type === "RETURN_PICKUP_ASSIGNED";
           if (!isIncomingOrderType || n.isRead || !n.data?.orderId) continue;
@@ -630,6 +852,14 @@ const DeliveryLayout = () => {
           applyAvailableOrdersList(list);
           return;
         }
+
+        if (canReceiveParcelBroadcast && !activeParcelOfferRef.current && !activeParcelRef.current) {
+          const parcelRes = await parcelApi.riderGetAvailable();
+          if (cancelled || !parcelRes?.data?.success) return;
+          const parcelList = parcelRes.data.results || parcelRes.data.result || [];
+          applyAvailableParcelsList(parcelList);
+        }
+
         consecutiveErrors = 0;
       } catch (error) {
         if (
@@ -687,12 +917,15 @@ const DeliveryLayout = () => {
       }
     };
   }, [
-    user?.isOnline,
+    canReceiveOrders,
     applyFromBroadcastPayload,
+    applyFromParcelBroadcastPayload,
+    applyAvailableParcelsList,
     applyAvailableOrdersList,
-    suppressIncomingModal,
+    shouldBlockIncomingOffers,
     fetchNotifications,
     fetchAvailableOrders,
+    canReceiveParcelBroadcast,
   ]);
 
   const skipOrder = useCallback(async () => {
@@ -743,6 +976,88 @@ const DeliveryLayout = () => {
     return () => clearInterval(timer);
   }, [activeOrder, skipOrder]);
 
+  const skipParcelOffer = useCallback(async () => {
+    const current = activeParcelOfferRef.current;
+    if (!current || acceptInFlightRef.current) return;
+    try {
+      await parcelApi.riderRejectParcel(current.parcelId);
+      shownParcelIdsRef.current = new Set(shownParcelIdsRef.current).add(current.parcelId);
+      stopOrderRingtone();
+      setActiveParcelOffer(null);
+      toast.info("Parcel offer skipped");
+    } catch (error) {
+      console.error("Parcel offer skip failed:", error);
+      setActiveParcelOffer(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeParcelOffer) return undefined;
+    const left = secondsLeftUntilParcelExpiry(activeParcelOffer.expiresAt);
+    if (left <= 0) {
+      if (!acceptInFlightRef.current) {
+        skipParcelOffer();
+        toast.error("Parcel request timed out");
+      }
+      return undefined;
+    }
+    setParcelAcceptWindowTotal(left);
+    setParcelTimeLeft(left);
+    const timer = setInterval(() => {
+      const next = secondsLeftUntilParcelExpiry(
+        activeParcelOfferRef.current?.expiresAt,
+      );
+      setParcelTimeLeft(next);
+      if (next <= 0) {
+        clearInterval(timer);
+        if (!acceptInFlightRef.current) {
+          skipParcelOffer();
+          toast.error("Parcel request timed out");
+        }
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [activeParcelOffer, skipParcelOffer]);
+
+  const handleAcceptParcelOffer = async () => {
+    const offer = activeParcelOfferRef.current;
+    if (!offer || acceptInFlightRef.current) return;
+    if (
+      offer.expiresAt &&
+      secondsLeftUntilParcelExpiry(offer.expiresAt) <= 0
+    ) {
+      toast.error("This parcel request has expired.");
+      setActiveParcelOffer(null);
+      return;
+    }
+
+    acceptInFlightRef.current = true;
+    setIsAcceptingOrder(true);
+    try {
+      const idem =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}`;
+      await parcelApi.riderAcceptParcel(offer.parcelId, idem);
+      shownParcelIdsRef.current = new Set(shownParcelIdsRef.current).add(offer.parcelId);
+      riderOnJobRef.current = true;
+      await refreshUser();
+      toast.success("Parcel accepted!");
+      stopOrderRingtone();
+      setActiveParcelOffer(null);
+      navigate(`/delivery/parcel-task/${offer.parcelId}`);
+    } catch (error) {
+      const msg =
+        error.response?.data?.message ||
+        (typeof error.response?.data === "string" ? error.response.data : null);
+      toast.error(msg || "Failed to accept parcel");
+      setActiveParcelOffer(null);
+    } finally {
+      acceptInFlightRef.current = false;
+      setIsAcceptingOrder(false);
+    }
+  };
+
   const handleAcceptOrder = async () => {
     if (!activeOrder || acceptInFlightRef.current) return;
     if (
@@ -770,6 +1085,8 @@ const DeliveryLayout = () => {
       const orderId = activeOrder.id;
       shownOrderIdsRef.current = new Set(shownOrderIdsRef.current).add(orderId);
       markIncomingOrderHandled(orderId);
+      riderOnJobRef.current = true;
+      await refreshUser();
       stopOrderRingtone();
       setActiveOrder(null);
       navigate(`/delivery/order-details/${orderId}`);
@@ -922,6 +1239,100 @@ const DeliveryLayout = () => {
               </div>
             )}
 
+            {activeParcelOffer && (
+              <div
+                className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-900/85 backdrop-blur-sm"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="delivery-parcel-offer-title"
+              >
+                <motion.div
+                  key={activeParcelOffer.parcelId}
+                  initial={{ scale: 0.92, opacity: 0, y: 24 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.96, opacity: 0, y: 16 }}
+                  transition={{ type: "spring", stiffness: 380, damping: 28 }}
+                  className="bg-white rounded-[32px] p-6 w-full max-w-[340px] shadow-2xl border-4 border-primary/20"
+                >
+                  <div className="flex flex-col items-center">
+                    <div className="h-16 w-16 bg-primary/10 rounded-full flex items-center justify-center mb-4 animate-bounce">
+                      <BellRing className="h-8 w-8 text-primary" />
+                    </div>
+
+                    <h2
+                      id="delivery-parcel-offer-title"
+                      className="text-xl font-black text-slate-900 mb-1"
+                    >
+                      New parcel request
+                    </h2>
+                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-4">
+                      First to accept gets the delivery
+                    </p>
+
+                    <div className="flex items-center gap-2 mb-6">
+                      <span className="text-2xl font-black text-brand-600">
+                        ₹{activeParcelOffer.earnings}
+                      </span>
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        You&apos;ll get
+                      </span>
+                    </div>
+
+                    <div className="w-full bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-3 mb-6 text-left text-xs">
+                      <div>
+                        <strong className="text-slate-800 block mb-0.5">Pickup:</strong>
+                        <p className="text-slate-500 font-medium line-clamp-2">{activeParcelOffer.pickup}</p>
+                      </div>
+                      <div className="border-t border-slate-200/60 pt-2.5">
+                        <strong className="text-slate-800 block mb-0.5">Dropoff:</strong>
+                        <p className="text-slate-500 font-medium line-clamp-2">{activeParcelOffer.drop}</p>
+                      </div>
+                      {activeParcelOffer.weight != null && (
+                        <div className="border-t border-slate-200/60 pt-2.5">
+                          <span className="text-slate-600 font-bold">{activeParcelOffer.weight} KG</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full mb-2 overflow-hidden">
+                      <motion.div
+                        key={`${activeParcelOffer.parcelId}-${parcelAcceptWindowTotal}`}
+                        initial={{ width: "100%" }}
+                        animate={{ width: "0%" }}
+                        transition={{
+                          duration: Math.max(1, parcelAcceptWindowTotal || 60),
+                          ease: "linear",
+                        }}
+                        className={parcelTimeLeft < 10 ? "bg-rose-500 h-full" : "bg-primary h-full"}
+                      />
+                    </div>
+                    <p className="text-[10px] font-bold text-slate-400 mb-4 w-full text-center">
+                      {parcelTimeLeft}s left to respond
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-3 w-full">
+                      <button
+                        type="button"
+                        disabled={isAcceptingOrder}
+                        onClick={skipParcelOffer}
+                        className="py-4 rounded-2xl bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-wider hover:bg-slate-200/80 disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isAcceptingOrder}
+                        onClick={handleAcceptParcelOffer}
+                        className="py-4 rounded-2xl bg-primary text-primary-foreground font-black text-xs uppercase tracking-wider shadow-lg shadow-primary/30 active:scale-95 disabled:opacity-60"
+                      >
+                        {isAcceptingOrder ? "Accepting…" : "Accept"}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+
             {activeParcel && (
               <div
                 className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-900/85 backdrop-blur-sm"
@@ -966,8 +1377,22 @@ const DeliveryLayout = () => {
                       </div>
                       <div className="border-t border-slate-200/60 pt-2.5 flex justify-between items-center">
                         <div>
-                          <strong className="text-slate-800 block mb-0.5">Rider Payout (80%):</strong>
-                          <span className="text-brand-600 font-black text-sm">₹{(activeParcel.fare * 0.8).toFixed(2)}</span>
+                          <strong className="text-slate-800 block mb-0.5">You&apos;ll get:</strong>
+                          <span className="text-brand-600 font-black text-sm">
+                            ₹{Number(
+                              activeParcel.earnings != null
+                                ? activeParcel.earnings
+                                : Math.round(
+                                    (Number(activeParcel.fare) || 0) *
+                                      (Math.min(
+                                        100,
+                                        Math.max(0, Number(activeParcel.riderSharePercent) ?? 80),
+                                      ) /
+                                        100) *
+                                      100,
+                                  ) / 100,
+                            ).toFixed(2)}
+                          </span>
                         </div>
                         <div className="text-right">
                           <strong className="text-slate-800 block mb-0.5">Weight:</strong>
@@ -1007,7 +1432,7 @@ const DeliveryLayout = () => {
                             const res = await parcelApi.riderUpdateStatus({ parcelId: activeParcel._id, status: "ACCEPTED" });
                             if (res.data?.success) {
                               toast.success("Parcel task accepted!");
-                              navigate('/delivery/dashboard');
+                              navigate(`/delivery/parcel-task/${activeParcel._id}`);
                             }
                           } catch (err) {
                             toast.error(err.response?.data?.message || "Failed to accept parcel task");

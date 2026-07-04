@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Truck,
   DollarSign,
@@ -17,17 +18,16 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { parcelApi } from "../../customer/services/parcelApi";
-import { onParcelNew } from "@/core/services/orderSocket";
+import { onParcelNew, onParcelStatusUpdate, getOrderSocket } from "@/core/services/orderSocket";
 import { createSocketTokenReader } from "@core/utils/authStorage";
 import { STORAGE_KEYS } from "@core/utils/storage";
 
 const AdminParcelDashboard = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("all"); // 'all', 'active', 'pricing', 'reports'
   const [loading, setLoading] = useState(false);
   const [parcels, setParcels] = useState([]);
   const [riders, setRiders] = useState([]);
-  const [assigningParcel, setAssigningParcel] = useState(null);
-  const [selectedRiderId, setSelectedRiderId] = useState("");
   const [selectedParcel, setSelectedParcel] = useState(null);
 
   useEffect(() => {
@@ -49,7 +49,21 @@ const AdminParcelDashboard = () => {
     baseFare: 0,
     perKmCharge: 0,
     weightCharge: 0,
+    baseSearchRadiusKm: 5,
+    radiusMultiplier: 1.6,
+    riderBaseFareSharePercent: 80,
+    riderDistanceFareSharePercent: 80,
+    packageTypes: [
+      { value: "document", label: "Document / Paper", isActive: true },
+      { value: "food", label: "Food Items", isActive: true },
+      { value: "clothes", label: "Clothes / Fabric", isActive: true },
+      { value: "electronics", label: "Electronics", isActive: true },
+      { value: "other", label: "Other Packets", isActive: true },
+    ],
+    maxWeightKg: 5,
+    packageDescriptionPlaceholder: "E.g. keys, critical document papers...",
   });
+  const [newPackageTypeLabel, setNewPackageTypeLabel] = useState("");
   const [pricingSaving, setPricingSaving] = useState(false);
 
   // Reports state
@@ -58,6 +72,9 @@ const AdminParcelDashboard = () => {
     completed: 0,
     cancelled: 0,
     revenue: 0,
+    riderSharePercent: 80,
+    riderPayout: 0,
+    adminCommission: 0,
   });
 
   const fetchData = useCallback(async (isSilent = false) => {
@@ -78,17 +95,46 @@ const AdminParcelDashboard = () => {
       // Fetch Pricing
       const pricingRes = await parcelApi.adminGetPricingConfig();
       if (pricingRes.data && pricingRes.data.success) {
+        const cfg = pricingRes.data.result || {};
         setPricing({
-          baseFare: pricingRes.data.result.baseFare || 0,
-          perKmCharge: pricingRes.data.result.perKmCharge || 0,
-          weightCharge: pricingRes.data.result.weightCharge || 0,
+          baseFare: cfg.baseFare || 0,
+          perKmCharge: cfg.perKmCharge || 0,
+          weightCharge: cfg.weightCharge || 0,
+          baseSearchRadiusKm: cfg.baseSearchRadiusKm ?? 5,
+          radiusMultiplier: cfg.radiusMultiplier ?? 1.6,
+          riderBaseFareSharePercent:
+            cfg.riderBaseFareSharePercent ?? cfg.riderSharePercent ?? 80,
+          riderDistanceFareSharePercent:
+            cfg.riderDistanceFareSharePercent ?? cfg.riderSharePercent ?? 80,
+          packageTypes: Array.isArray(cfg.packageTypes) && cfg.packageTypes.length
+            ? cfg.packageTypes
+            : [
+                { value: "document", label: "Document / Paper", isActive: true },
+                { value: "food", label: "Food Items", isActive: true },
+                { value: "clothes", label: "Clothes / Fabric", isActive: true },
+                { value: "electronics", label: "Electronics", isActive: true },
+                { value: "other", label: "Other Packets", isActive: true },
+              ],
+          maxWeightKg: cfg.maxWeightKg ?? 5,
+          packageDescriptionPlaceholder:
+            cfg.packageDescriptionPlaceholder ||
+            "E.g. keys, critical document papers...",
         });
       }
 
       // Fetch Reports
       const reportsRes = await parcelApi.adminGetReports();
       if (reportsRes.data && reportsRes.data.success) {
-        setReports(reportsRes.data.result);
+        setReports({
+          totalDeliveries: 0,
+          completed: 0,
+          cancelled: 0,
+          revenue: 0,
+          riderSharePercent: 80,
+          riderPayout: 0,
+          adminCommission: 0,
+          ...(reportsRes.data.result || {}),
+        });
       }
     } catch (error) {
       console.error("Failed to load dashboard data:", error);
@@ -129,6 +175,9 @@ const AdminParcelDashboard = () => {
         totalDeliveries: (prev.totalDeliveries || 0) + 1,
       }));
 
+      toast.info(`New parcel request #${String(newParcel._id).slice(-6)}`);
+      setSelectedParcel(newParcel);
+
       // Immediately fetch fully populated data in background
       fetchData(true);
     });
@@ -138,50 +187,81 @@ const AdminParcelDashboard = () => {
     };
   }, [fetchData]);
 
+  // Open parcel details when navigated from notification / alert (`?parcelId=`)
+  useEffect(() => {
+    const parcelId = searchParams.get("parcelId");
+    if (!parcelId || !parcels.length) return;
+    const match = parcels.find((p) => String(p._id) === String(parcelId));
+    if (!match) return;
+    setSelectedParcel(match);
+    setActiveTab("all");
+    const next = new URLSearchParams(searchParams);
+    next.delete("parcelId");
+    setSearchParams(next, { replace: true });
+  }, [parcels, searchParams, setSearchParams]);
+
+  // Live status updates (assigned rider / progress / delivered)
+  useEffect(() => {
+    const getToken = createSocketTokenReader(STORAGE_KEYS.AUTH_ADMIN);
+    getOrderSocket(getToken);
+    return onParcelStatusUpdate(getToken, (payload) => {
+      const updated = payload?.parcel || payload;
+      const id = updated?._id || payload?.parcelId;
+      if (!id) return;
+
+      setParcels((prev) => {
+        const exists = prev.some((p) => String(p._id) === String(id));
+        if (!exists) return prev;
+        return prev.map((p) => (String(p._id) === String(id) ? { ...p, ...updated } : p));
+      });
+
+      // keep summary reasonably fresh
+      fetchData(true);
+    });
+  }, [fetchData]);
+
   // Handle pricing update
   const handleUpdatePricing = async (e) => {
     e.preventDefault();
     setPricingSaving(true);
     try {
-      const res = await parcelApi.adminUpdatePricingConfig(pricing);
+      const payload = {
+        baseFare: Number(pricing.baseFare),
+        perKmCharge: Number(pricing.perKmCharge),
+        weightCharge: Number(pricing.weightCharge),
+        baseSearchRadiusKm: Number(pricing.baseSearchRadiusKm),
+        radiusMultiplier: Number(pricing.radiusMultiplier),
+        riderBaseFareSharePercent: Number(pricing.riderBaseFareSharePercent),
+        riderDistanceFareSharePercent: Number(pricing.riderDistanceFareSharePercent),
+        packageTypes: pricing.packageTypes,
+        maxWeightKg: Number(pricing.maxWeightKg),
+        packageDescriptionPlaceholder: pricing.packageDescriptionPlaceholder,
+      };
+      const res = await parcelApi.adminUpdatePricingConfig(payload);
       if (res.data && res.data.success) {
-        toast.success("Pricing configuration updated successfully!");
+        toast.success("Parcel settings updated successfully!");
         fetchData();
       } else {
-        toast.error(res.data.message || "Failed to update pricing");
+        toast.error(res.data.message || "Failed to update settings");
       }
     } catch (error) {
-      toast.error("Failed to save pricing");
+      toast.error("Failed to save settings");
     } finally {
       setPricingSaving(false);
     }
   };
 
-  // Handle Assigning Rider
-  const handleAssignRiderSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedRiderId) return toast.error("Please select a delivery partner");
-    try {
-      const res = await parcelApi.adminAssignRider({
-        parcelId: assigningParcel,
-        riderId: selectedRiderId
-      });
-      if (res.data && res.data.success) {
-        toast.success("Rider assigned successfully!");
-        setAssigningParcel(null);
-        setSelectedRiderId("");
-        fetchData();
-      } else {
-        toast.error(res.data.message || "Failed to assign rider");
-      }
-    } catch (error) {
-      toast.error("Assignment failed");
-    }
+  const getActiveParcels = () => {
+    const activeStatuses = ["SEARCHING", "REQUESTED", "ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"];
+    return parcels.filter(p => activeStatuses.includes(p.status));
   };
 
-  const getActiveParcels = () => {
-    const activeStatuses = ["REQUESTED", "ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"];
-    return parcels.filter(p => activeStatuses.includes(p.status));
+  const getSearchingParcels = () =>
+    parcels.filter((p) => p.status === "SEARCHING" && !p.deliveryPartnerId);
+
+  const formatParcelStatus = (status) => {
+    if (status === "SEARCHING") return "Searching for rider";
+    return status;
   };
 
   return (
@@ -202,7 +282,7 @@ const AdminParcelDashboard = () => {
           {[
             { id: "all", label: "All Bookings", icon: ClipboardList },
             { id: "active", label: "Active Deliveries", icon: Activity },
-            { id: "pricing", label: "Pricing Config", icon: Settings },
+            { id: "pricing", label: "Parcel Settings", icon: Settings },
             { id: "reports", label: "Revenue Reports", icon: TrendingUp },
           ].map((tab) => (
             <button
@@ -299,9 +379,10 @@ const AdminParcelDashboard = () => {
                             <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase block w-fit ${
                               parcel.status === "DELIVERED" ? "bg-green-100 text-green-700" :
                               parcel.status === "CANCELLED" ? "bg-red-100 text-red-600" :
+                              parcel.status === "SEARCHING" ? "bg-amber-100 text-amber-700 animate-pulse" :
                               "bg-blue-100 text-blue-700 animate-pulse"
                             }`}>
-                              {parcel.status}
+                              {formatParcelStatus(parcel.status)}
                             </span>
 
                             {parcel.deliveryPartnerId ? (
@@ -310,15 +391,9 @@ const AdminParcelDashboard = () => {
                               </div>
                             ) : (
                               parcel.status !== "CANCELLED" && parcel.status !== "DELIVERED" && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setAssigningParcel(parcel._id);
-                                  }}
-                                  className="mt-2 text-xs bg-primary hover:bg-primary-dark text-white font-bold px-3 py-1 rounded-lg transition-all"
-                                >
-                                  Assign Rider
-                                </button>
+                                <div className="text-[11px] text-amber-700 font-bold mt-1">
+                                  Auto broadcasting to nearby parcel riders
+                                </div>
                               )
                             )}
                           </td>
@@ -338,9 +413,16 @@ const AdminParcelDashboard = () => {
               <div className="md:col-span-2 bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
                 <div className="p-5 border-b border-slate-100 flex justify-between items-center">
                   <h2 className="text-base font-black text-slate-800">In-Progress Deliveries</h2>
-                  <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-bold">
-                    {getActiveParcels().length} active
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {getSearchingParcels().length > 0 && (
+                      <span className="text-xs bg-amber-50 text-amber-700 px-3 py-1 rounded-full font-bold">
+                        {getSearchingParcels().length} searching
+                      </span>
+                    )}
+                    <span className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-bold">
+                      {getActiveParcels().length} active
+                    </span>
+                  </div>
                 </div>
 
                 {getActiveParcels().length === 0 ? (
@@ -362,7 +444,7 @@ const AdminParcelDashboard = () => {
                               {new Date(parcel.createdAt).toLocaleTimeString()}
                             </span>
                             <span className="text-[10px] font-extrabold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full uppercase">
-                              {parcel.status}
+                              {formatParcelStatus(parcel.status)}
                             </span>
                           </div>
 
@@ -383,15 +465,9 @@ const AdminParcelDashboard = () => {
                               Rider: <strong className="text-slate-700">{parcel.deliveryPartnerId.name}</strong>
                             </div>
                           ) : (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setAssigningParcel(parcel._id);
-                              }}
-                              className="mt-2 text-xs bg-primary hover:bg-primary-dark text-white font-bold px-3 py-1 rounded-lg transition-all"
-                            >
-                              Assign Rider
-                            </button>
+                            <div className="text-[11px] text-amber-700 font-bold mt-2">
+                              Request is auto-broadcasting
+                            </div>
                           )}
                         </div>
                       </div>
@@ -435,62 +511,338 @@ const AdminParcelDashboard = () => {
             </div>
           )}
 
-          {/* TAB 3: PRICING CONFIG */}
+          {/* TAB 3: PARCEL SETTINGS */}
           {activeTab === "pricing" && (
-            <div className="max-w-md mx-auto bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
-              <div className="p-5 border-b border-slate-100">
-                <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
-                  <Settings className="text-primary" size={18} /> Configure Pricing Model
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Dynamically adjust rates for parcel delivery bookings up to 1 KG.
-                </p>
-              </div>
+            <div className="max-w-2xl mx-auto space-y-5">
+              <form onSubmit={handleUpdatePricing} className="space-y-5">
+                <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <DollarSign className="text-primary" size={18} /> Customer Pricing
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Fare charged to customers for parcel bookings (up to {pricing.maxWeightKg || 5} KG).
+                    </p>
+                  </div>
 
-              <form onSubmit={handleUpdatePricing} className="p-5 space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Base Fare (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    value={pricing.baseFare}
-                    onChange={(e) => setPricing(p => ({ ...p, baseFare: Number(e.target.value) }))}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                  />
-                  <p className="text-[10px] text-slate-400 font-medium">Flat fee charged for every booking.</p>
+                  <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Base Fare (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={pricing.baseFare}
+                        onChange={(e) => setPricing((p) => ({ ...p, baseFare: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">Flat fee for every booking.</p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Per KM Charge (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={pricing.perKmCharge}
+                        onChange={(e) => setPricing((p) => ({ ...p, perKmCharge: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">Added per kilometer.</p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Weight / KG (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={pricing.weightCharge}
+                        onChange={(e) => setPricing((p) => ({ ...p, weightCharge: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">Multiplied by package weight.</p>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Per KM Charge (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    value={pricing.perKmCharge}
-                    onChange={(e) => setPricing(p => ({ ...p, perKmCharge: Number(e.target.value) }))}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                  />
-                  <p className="text-[10px] text-slate-400 font-medium">Added cost per kilometer calculated.</p>
+                <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <MapPin className="text-primary" size={18} /> Delivery Partner Search Radius
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Decide how far nearby parcel riders are notified when a booking starts.
+                    </p>
+                  </div>
+
+                  <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Base Radius (KM)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        step="0.5"
+                        required
+                        value={pricing.baseSearchRadiusKm}
+                        onChange={(e) => setPricing((p) => ({ ...p, baseSearchRadiusKm: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        First broadcast radius from pickup location.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Radius Expand Multiplier</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="5"
+                        step="0.1"
+                        required
+                        value={pricing.radiusMultiplier}
+                        onChange={(e) => setPricing((p) => ({ ...p, radiusMultiplier: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        If no rider accepts, radius grows by this factor (e.g. 5km × 1.6 = 8km).
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Weight Charge per KG (₹)</label>
-                  <input
-                    type="number"
-                    required
-                    value={pricing.weightCharge}
-                    onChange={(e) => setPricing(p => ({ ...p, weightCharge: Number(e.target.value) }))}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                  />
-                  <p className="text-[10px] text-slate-400 font-medium">Added cost multiplied by package weight (Max 1 KG).</p>
+                <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <Package className="text-primary" size={18} /> Package Details Options
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Configure package types, max weight, and description placeholder shown to customers.
+                    </p>
+                  </div>
+
+                  <div className="p-5 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Max Weight (KG)</label>
+                        <input
+                          type="number"
+                          min="0.1"
+                          max="50"
+                          step="0.1"
+                          required
+                          value={pricing.maxWeightKg}
+                          onChange={(e) =>
+                            setPricing((p) => ({ ...p, maxWeightKg: e.target.value }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div className="space-y-1 sm:col-span-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">
+                          Description Placeholder
+                        </label>
+                        <input
+                          type="text"
+                          value={pricing.packageDescriptionPlaceholder}
+                          onChange={(e) =>
+                            setPricing((p) => ({
+                              ...p,
+                              packageDescriptionPlaceholder: e.target.value,
+                            }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Package Types</label>
+                      <div className="space-y-2">
+                        {(pricing.packageTypes || []).map((type, idx) => (
+                          <div
+                            key={`${type.value}-${idx}`}
+                            className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"
+                          >
+                            <input
+                              type="text"
+                              value={type.label}
+                              onChange={(e) => {
+                                const label = e.target.value;
+                                setPricing((p) => {
+                                  const next = [...(p.packageTypes || [])];
+                                  next[idx] = {
+                                    ...next[idx],
+                                    label,
+                                    value:
+                                      next[idx].value ||
+                                      label
+                                        .toLowerCase()
+                                        .replace(/[^a-z0-9]+/g, "_")
+                                        .replace(/^_+|_+$/g, ""),
+                                  };
+                                  return { ...p, packageTypes: next };
+                                });
+                              }}
+                              className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                              placeholder="Label (e.g. Document / Paper)"
+                            />
+                            <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-600 px-2">
+                              <input
+                                type="checkbox"
+                                checked={type.isActive !== false}
+                                onChange={(e) => {
+                                  setPricing((p) => {
+                                    const next = [...(p.packageTypes || [])];
+                                    next[idx] = { ...next[idx], isActive: e.target.checked };
+                                    return { ...p, packageTypes: next };
+                                  });
+                                }}
+                              />
+                              Active
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPricing((p) => ({
+                                  ...p,
+                                  packageTypes: (p.packageTypes || []).filter((_, i) => i !== idx),
+                                }))
+                              }
+                              className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={newPackageTypeLabel}
+                          onChange={(e) => setNewPackageTypeLabel(e.target.value)}
+                          placeholder="Add package type label"
+                          className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const label = newPackageTypeLabel.trim();
+                            if (!label) return;
+                            const value = label
+                              .toLowerCase()
+                              .replace(/[^a-z0-9]+/g, "_")
+                              .replace(/^_+|_+$/g, "");
+                            setPricing((p) => ({
+                              ...p,
+                              packageTypes: [
+                                ...(p.packageTypes || []),
+                                { value, label, isActive: true },
+                              ],
+                            }));
+                            setNewPackageTypeLabel("");
+                          }}
+                          className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold"
+                        >
+                          Add type
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <Truck className="text-primary" size={18} /> Delivery Partner Payout
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Rider earns admin-set % of base fare and distance fare only. Weight charge stays with platform.
+                    </p>
+                  </div>
+
+                  <div className="p-5 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase">
+                          Base Fare Share (%)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          required
+                          value={pricing.riderBaseFareSharePercent}
+                          onChange={(e) =>
+                            setPricing((p) => ({ ...p, riderBaseFareSharePercent: e.target.value }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                        />
+                        <p className="text-[10px] text-slate-400 font-medium">
+                          % of base fare paid to rider.
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase">
+                          Distance Fare Share (%)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          required
+                          value={pricing.riderDistanceFareSharePercent}
+                          onChange={(e) =>
+                            setPricing((p) => ({ ...p, riderDistanceFareSharePercent: e.target.value }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                        />
+                        <p className="text-[10px] text-slate-400 font-medium">
+                          % of distance fare paid to rider.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 text-xs text-slate-600 font-medium space-y-1">
+                      <p className="font-bold text-slate-800">Example payout</p>
+                      <p>
+                        Base ₹{Number(pricing.baseFare) || 0} × {Number(pricing.riderBaseFareSharePercent) || 0}%
+                        {" = "}
+                        ₹{(
+                          ((Number(pricing.baseFare) || 0) *
+                            (Number(pricing.riderBaseFareSharePercent) || 0)) /
+                          100
+                        ).toFixed(2)}
+                      </p>
+                      <p>
+                        Distance (e.g. ₹100) × {Number(pricing.riderDistanceFareSharePercent) || 0}%
+                        {" = "}
+                        ₹{(
+                          (100 * (Number(pricing.riderDistanceFareSharePercent) || 0)) /
+                          100
+                        ).toFixed(2)}
+                      </p>
+                      <p className="text-slate-400">Weight charge is not shared with the rider.</p>
+                    </div>
+                  </div>
                 </div>
 
                 <button
                   type="submit"
                   disabled={pricingSaving}
-                  className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all mt-2"
+                  className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all"
                 >
                   <Save size={16} />
-                  {pricingSaving ? "Saving..." : "Save pricing config"}
+                  {pricingSaving ? "Saving..." : "Save parcel settings"}
                 </button>
               </form>
             </div>
@@ -558,15 +910,19 @@ const AdminParcelDashboard = () => {
                 </p>
                 <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-100 text-xs">
                   <div className="bg-slate-50 p-4 rounded-2xl">
-                    <span className="text-slate-400 font-bold block uppercase">Admin Commision (20%)</span>
+                    <span className="text-slate-400 font-bold block uppercase">
+                      Admin Commission
+                    </span>
                     <span className="text-lg font-black text-slate-800 mt-1 block">
-                      ₹{Math.round((reports.revenue * 0.2 + Number.EPSILON) * 100) / 100}
+                      ₹{Number(reports.adminCommission || 0).toFixed(2)}
                     </span>
                   </div>
                   <div className="bg-slate-50 p-4 rounded-2xl">
-                    <span className="text-slate-400 font-bold block uppercase">Riders Payout (80%)</span>
+                    <span className="text-slate-400 font-bold block uppercase">
+                      Riders Payout (base {reports.riderBaseFareSharePercent ?? pricing.riderBaseFareSharePercent}% + distance {reports.riderDistanceFareSharePercent ?? pricing.riderDistanceFareSharePercent}%)
+                    </span>
                     <span className="text-lg font-black text-slate-800 mt-1 block">
-                      ₹{Math.round((reports.revenue * 0.8 + Number.EPSILON) * 100) / 100}
+                      ₹{Number(reports.riderPayout || 0).toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -574,57 +930,6 @@ const AdminParcelDashboard = () => {
             </div>
           )}
         </>
-      )}
-
-      {/* Assignment Modal */}
-      {assigningParcel && (
-        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <form onSubmit={handleAssignRiderSubmit} className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xl max-w-sm w-full space-y-4">
-            <h3 className="text-lg font-black text-slate-800">Assign Delivery Partner</h3>
-            <p className="text-xs text-slate-400">
-              Select a verified rider to assign to booking request #{assigningParcel.slice(-6)}.
-            </p>
-
-            <select
-              required
-              value={selectedRiderId}
-              onChange={(e) => setSelectedRiderId(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 bg-white text-sm outline-none focus:border-primary"
-            >
-              <option value="">-- Choose Rider --</option>
-              {riders.map((r) => {
-                const statusStr = !r.isParcelService
-                  ? "No Parcel Service"
-                  : !r.isOnline
-                  ? "Offline"
-                  : r.isBusy
-                  ? "Busy"
-                  : "Available";
-                return (
-                  <option key={r._id} value={r._id}>
-                    {r.name} ({r.phone}) — [{statusStr}]
-                  </option>
-                );
-              })}
-            </select>
-
-            <div className="flex gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => { setAssigningParcel(null); setSelectedRiderId(""); }}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 font-bold text-xs text-slate-600 transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="flex-1 py-2.5 bg-primary hover:bg-primary-dark text-white font-bold text-xs rounded-xl transition-all"
-              >
-                Assign
-              </button>
-            </div>
-          </form>
-        </div>
       )}
 
       {/* Selected Parcel Details Modal */}

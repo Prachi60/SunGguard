@@ -277,3 +277,24 @@ export function onParcelAssigned(getToken, handler) {
   return () => s.off("parcel:assigned", handler);
 }
 
+export function onParcelBroadcast(getToken, handler) {
+  const s = getOrderSocket(getToken);
+  if (!s || typeof handler !== "function") return () => {};
+  s.on("parcel:broadcast", handler);
+  return () => s.off("parcel:broadcast", handler);
+}
+
+export function onParcelBroadcastWithdrawn(getToken, handler) {
+  const s = getOrderSocket(getToken);
+  if (!s || typeof handler !== "function") return () => {};
+  s.on("parcel:broadcast:withdrawn", handler);
+  return () => s.off("parcel:broadcast:withdrawn", handler);
+}
+
+export function onParcelStatusUpdate(getToken, handler) {
+  const s = getOrderSocket(getToken);
+  if (!s || typeof handler !== "function") return () => {};
+  s.on("parcel:status:update", handler);
+  return () => s.off("parcel:status:update", handler);
+}
+

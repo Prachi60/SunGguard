@@ -127,7 +127,7 @@ const DeliveryTrackingMapComponent = ({
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 
   const { isLoaded, loadError } = useJsApiLoader({
-    id: "delivery-tracking-map",
+    id: "google-map-script",
     googleMapsApiKey: apiKey,
     libraries,
   });

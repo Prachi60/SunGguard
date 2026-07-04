@@ -21,6 +21,7 @@ import {
   Terminal,
   Sparkles,
   User,
+  Package,
 } from "lucide-react";
 
 const Dashboard = React.lazy(() => import("../pages/Dashboard"));
@@ -50,6 +51,9 @@ const ActiveDeliveryBoys = React.lazy(
 );
 const PendingDeliveryBoys = React.lazy(
   () => import("../pages/PendingDeliveryBoys"),
+);
+const AdminParcelDashboard = React.lazy(
+  () => import("../pages/AdminParcelDashboard"),
 );
 const DeliveryFunds = React.lazy(() => import("../pages/DeliveryFunds"));
 const AdminWallet = React.lazy(() => import("../pages/AdminWallet"));
@@ -156,6 +160,12 @@ const navItems = [
       { label: "Send Money", path: "/admin/delivery-funds" },
     ],
   },
+  {
+    label: "Parcel Delivery",
+    path: "/admin/parcels",
+    icon: Package,
+    color: "cyan",
+  },
   { label: "Wallet", path: "/admin/wallet", icon: Wallet, color: "violet" },
   {
     label: "Money Requests",
@@ -260,6 +270,7 @@ const AdminRoutes = () => {
           path="/delivery-boys/pending"
           element={<PendingDeliveryBoys />}
         />
+        <Route path="/parcels" element={<AdminParcelDashboard />} />
         <Route path="/tracking" element={<FleetTracking />} />
         <Route path="/delivery-funds" element={<DeliveryFunds />} />
         <Route path="/wallet" element={<AdminWallet />} />

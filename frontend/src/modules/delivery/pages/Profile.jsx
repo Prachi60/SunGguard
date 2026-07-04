@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   User,
@@ -18,18 +18,45 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import Button from "@/shared/components/ui/Button";
-import Card from "@/shared/components/ui/Card";
 import { useAuth } from "@core/context/AuthContext";
 import { useSettings } from "@core/context/SettingsContext";
 import axiosInstance from '@core/api/axios';
 import { useEffect } from 'react';
+import { toast } from "sonner";
+import { deliveryApi } from "../services/deliveryApi";
 
 const Profile = () => {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, user, refreshUser } = useAuth();
   const { settings } = useSettings();
   const appName = settings?.appName || "App";
   const [faqs, setFaqs] = useState([]);
+  const [stats, setStats] = useState(null);
+
+  const formatDate = (value) => {
+    if (!value) return "N/A";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "N/A";
+    return date.toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+  };
+
+  const formatPhone = (phone) => {
+    if (!phone) return "N/A";
+    const digits = String(phone).replace(/\D/g, "");
+    if (digits.length === 10) return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
+    return phone;
+  };
+
+  const profileImage = useMemo(() => {
+    if (user?.profileImage) return user.profileImage;
+    const seed = encodeURIComponent(user?.name || user?.phone || "delivery");
+    return `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}`;
+  }, [user?.profileImage, user?.name, user?.phone]);
+
+  const partnerIdShort = useMemo(
+    () => String(user?._id || user?.id || "").slice(-6).toUpperCase() || "N/A",
+    [user?._id, user?.id],
+  );
 
   useEffect(() => {
     const fetchFaqs = async () => {
@@ -42,6 +69,19 @@ const Profile = () => {
     };
     fetchFaqs();
   }, []);
+
+  useEffect(() => {
+    refreshUser?.().catch(() => {});
+    deliveryApi.getStats()
+      .then((res) => {
+        if (res.data?.success) {
+          setStats(res.data.result || null);
+        }
+      })
+      .catch(() => {
+        setStats(null);
+      });
+  }, [refreshUser]);
 
   const menuItems = [
     {
@@ -61,7 +101,10 @@ const Profile = () => {
     {
       icon: CreditCard,
       label: "Bank Account",
-      sub: "HDFC Bank **** 8921",
+      sub:
+        user?.accountNumber
+          ? `${user?.ifsc || "Bank"} **** ${String(user.accountNumber).slice(-4)}`
+          : "Add bank account details",
       color: "text-brand-600 bg-brand-50",
       path: "/delivery/profile/bank-account",
     },
@@ -75,7 +118,9 @@ const Profile = () => {
     {
       icon: FileText,
       label: "Documents",
-      sub: "Aadhar, PAN, DL (Verified)",
+      sub: user?.documents?.aadhar || user?.documents?.pan || user?.documents?.drivingLicense
+        ? "Aadhar, PAN, DL uploaded"
+        : "Upload Aadhar, PAN, DL",
       color: "text-purple-600 bg-purple-50",
       path: "/delivery/profile/documents",
     },
@@ -134,7 +179,7 @@ const Profile = () => {
           <div className="relative">
             <div className="w-20 h-20 bg-white rounded-full p-1 shadow-lg">
               <img
-                src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"
+                src={profileImage}
                 alt="Profile"
                 className="w-full h-full rounded-full object-cover bg-gray-100"
               />
@@ -142,17 +187,23 @@ const Profile = () => {
             <div className="absolute bottom-0 right-0 w-6 h-6 bg-brand-500 border-2 border-white rounded-full"></div>
           </div>
           <div className="text-white">
-            <h2 className="font-bold text-xl">Rahul Kumar</h2>
+            <h2 className="font-bold text-xl">{user?.name || "Delivery Partner"}</h2>
             <p className="text-white/80 text-sm flex items-center mb-1">
-              <Phone size={14} className="mr-1" /> +91 98765 43210
+              <Phone size={14} className="mr-1" /> {formatPhone(user?.phone)}
             </p>
             <div className="flex items-center space-x-2">
               <span className="bg-white/20 px-2 py-0.5 rounded text-xs font-medium backdrop-blur-sm">
-                ID: 882190
+                ID: {partnerIdShort}
               </span>
-              <span className="bg-brand-500 text-primary-foreground px-2 py-0.5 rounded text-xs font-bold shadow-sm">
-                VERIFIED
-              </span>
+              {user?.isVerified ? (
+                <span className="bg-brand-500 text-primary-foreground px-2 py-0.5 rounded text-xs font-bold shadow-sm">
+                  VERIFIED
+                </span>
+              ) : (
+                <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-xs font-bold shadow-sm">
+                  PENDING
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -168,14 +219,16 @@ const Profile = () => {
           <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider">
             Joined
           </p>
-          <p className="font-bold text-gray-900 text-lg">Jan '24</p>
+          <p className="font-bold text-gray-900 text-lg">{formatDate(user?.createdAt)}</p>
         </div>
         <div className="w-px bg-gray-100"></div>
         <div className="flex-1">
           <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider">
             Trips
           </p>
-          <p className="font-bold text-gray-900 text-lg">1,240</p>
+          <p className="font-bold text-gray-900 text-lg">
+            {Number(stats?.deliveries ?? stats?.totalDeliveries ?? 0).toLocaleString("en-IN")}
+          </p>
         </div>
         <div className="w-px bg-gray-100"></div>
         <div className="flex-1">
@@ -183,7 +236,7 @@ const Profile = () => {
             Rating
           </p>
           <p className="font-bold text-gray-900 text-lg flex justify-center items-center">
-            4.8 <span className="text-yellow-400 text-sm ml-1">★</span>
+            {Number(user?.rating || stats?.rating || 4.8).toFixed(1)} <span className="text-yellow-400 text-sm ml-1">★</span>
           </p>
         </div>
       </motion.div>

@@ -557,7 +557,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
 
                                 <h2 className="text-2xl font-black text-slate-900 mb-2">New Parcel Request!</h2>
                                 <p className="text-slate-600 font-medium mb-6">
-                                    A new parcel delivery request <span className="text-primary font-bold">#{newParcelAlert._id.slice(-6)}</span> has been booked for <span className="text-slate-900 font-bold">₹{newParcelAlert.fare}</span>
+                                    A new parcel delivery request <span className="text-primary font-bold">#{String(newParcelAlert._id).slice(-6)}</span> has been booked for <span className="text-slate-900 font-bold">₹{newParcelAlert.fare}</span>
                                 </p>
 
                                 <div className="flex gap-3 w-full">
@@ -573,12 +573,13 @@ const DashboardLayout = ({ children, navItems, title }) => {
                                     <button
                                         onClick={() => {
                                             stopOrderRingtone();
+                                            const parcelId = newParcelAlert._id;
                                             setNewParcelAlert(null);
-                                            navigate('/admin/parcels');
+                                            navigate(parcelId ? `/admin/parcels?parcelId=${parcelId}` : "/admin/parcels");
                                         }}
                                         className="flex-1 py-3 px-4 rounded-xl text-center text-xs font-black uppercase tracking-widest bg-primary hover:bg-primary-dark text-white shadow-lg shadow-primary/20 transition-all duration-300"
                                     >
-                                        View & Assign
+                                        View Request
                                     </button>
                                 </div>
                             </div>

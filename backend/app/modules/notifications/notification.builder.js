@@ -64,6 +64,22 @@ function buildSellerInventoryLink(productId) {
     : `${baseUrl}/seller/inventory`;
 }
 
+function buildAdminParcelLink(parcelId) {
+  const baseUrl = getFrontendBaseUrl();
+  const id = String(parcelId || "").trim();
+  return id
+    ? `${baseUrl}/admin/parcels?parcelId=${encodeURIComponent(id)}`
+    : `${baseUrl}/admin/parcels`;
+}
+
+function buildCustomerParcelLink(parcelId) {
+  const baseUrl = getFrontendBaseUrl();
+  const id = String(parcelId || "").trim();
+  return id
+    ? `${baseUrl}/parcel/search/${encodeURIComponent(id)}`
+    : `${baseUrl}/parcel`;
+}
+
 function eventDefinition(eventType) {
   switch (eventType) {
     case NOTIFICATION_EVENTS.ORDER_PLACED:
@@ -360,10 +376,41 @@ function eventDefinition(eventType) {
       };
     case NOTIFICATION_EVENTS.PARCEL_REQUESTED:
       return {
-        role: NOTIFICATION_ROLES.CUSTOMER,
-        recipientIds: (payload) => normalizeIdList(payload.userId || payload.customerId),
-        title: () => "Parcel Request Created",
-        body: (payload) => payload.body || "Your parcel request has been created.",
+        multi: true,
+        definitions: [
+          {
+            role: NOTIFICATION_ROLES.CUSTOMER,
+            recipientIds: (payload) =>
+              normalizeIdList(payload.userId || payload.customerId),
+            title: () => "Parcel Request Created",
+            body: (payload) =>
+              payload.customerBody ||
+              payload.body ||
+              "Your parcel request has been created.",
+          },
+          {
+            role: NOTIFICATION_ROLES.ADMIN,
+            recipientIds: (payload) => normalizeIdList(payload.adminIds),
+            title: () => "New Parcel Request 📦",
+            body: (payload) =>
+              payload.adminBody ||
+              (payload.parcelId
+                ? `Parcel #${String(payload.parcelId).slice(-6)} booked for ₹${
+                    Number(payload.fare) || 0
+                  }. Tap to view.`
+                : "A customer placed a new parcel delivery request."),
+          },
+        ],
+      };
+    case NOTIFICATION_EVENTS.NEW_PARCEL_BROADCAST:
+      return {
+        role: NOTIFICATION_ROLES.DELIVERY,
+        recipientIds: (payload) => normalizeIdList(payload.deliveryIds),
+        title: () => "New Parcel Request 📦",
+        body: (payload) =>
+          payload.parcelId
+            ? `Parcel #${String(payload.parcelId).slice(-6)} is available nearby.`
+            : "A new parcel delivery request is available nearby.",
       };
     case NOTIFICATION_EVENTS.PARCEL_ASSIGNED:
       return {
@@ -428,11 +475,14 @@ function eventData(eventType, payload = {}, role) {
     NOTIFICATION_EVENTS.PARCEL_DELIVERED
   ].includes(eventType)) {
     const parcelId = String(payload.parcelId || "").trim() || undefined;
-    const baseUrl = getFrontendBaseUrl();
-    const link = parcelId ? `${baseUrl}/parcel/track/${encodeURIComponent(parcelId)}` : `${baseUrl}/parcel/history`;
+    const link =
+      role === NOTIFICATION_ROLES.ADMIN
+        ? buildAdminParcelLink(parcelId)
+        : buildCustomerParcelLink(parcelId);
     return {
       eventType,
       parcelId,
+      fare: payload.fare != null ? Number(payload.fare) : undefined,
       link,
       ...(payload.data || {}),
     };

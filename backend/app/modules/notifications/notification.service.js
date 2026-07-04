@@ -32,9 +32,11 @@ function dedupeKeyForNotification(eventType, notification, payload = {}) {
     payload.messageId ||
     payload.messageCreatedAt ||
     payload.ticketId ||
+    payload.parcelId ||
     payload.orderId ||
     payload.productId ||
     payload.variantSku ||
+    notification?.data?.parcelId ||
     notification?.data?.orderId ||
     notification?.data?.productId ||
     notification?.data?.variantSku ||

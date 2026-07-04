@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Bell,
   Star,
@@ -26,6 +26,7 @@ import Card from "@/shared/components/ui/Card";
 
 import { useAuth } from "@core/context/AuthContext";
 import { deliveryApi } from "../services/deliveryApi";
+import { parcelApi } from "../../customer/services/parcelApi";
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -36,12 +37,14 @@ const Dashboard = () => {
     user?.isParcelService ? "delivery" : (user?.isCarWashService ? "car-wash" : "delivery")
   ); // 'delivery', 'return', 'parcel', 'car-wash'
   const [availableOrders, setAvailableOrders] = useState([]);
+  const [assignedParcel, setAssignedParcel] = useState(null);
   const [earnings, setEarnings] = useState({
     today: 0,
     deliveries: 0,
     incentives: 0,
     cashCollected: 0,
   });
+  const assignedParcelRequestRef = useRef({ inFlight: false, lastFetchedAt: 0 });
 
   // Sync isOnline with user profile from context
   useEffect(() => {
@@ -77,6 +80,10 @@ const Dashboard = () => {
   };
 
   const fetchAvailableOrders = async () => {
+    if (user?.isBusy) {
+      setAvailableOrders([]);
+      return;
+    }
     try {
       const response = await deliveryApi.getAvailableOrders({ type: activeTab });
       if (response.data.success) {
@@ -88,11 +95,36 @@ const Dashboard = () => {
     }
   };
 
+  const fetchAssignedParcel = useCallback(async (force = false) => {
+    const now = Date.now();
+    if (!force && now - assignedParcelRequestRef.current.lastFetchedAt < 12000) return;
+    if (assignedParcelRequestRef.current.inFlight) return;
+    assignedParcelRequestRef.current.inFlight = true;
+    try {
+      const res = await parcelApi.riderGetAssigned({ ttl: 12000 });
+      if (!res.data?.success) return;
+      const list = res.data.results || res.data.result || [];
+      const active = list.find(
+        (p) => p.status && !["DELIVERED", "CANCELLED"].includes(p.status),
+      );
+      setAssignedParcel(active || null);
+    } catch {
+      setAssignedParcel(null);
+    } finally {
+      assignedParcelRequestRef.current.inFlight = false;
+      assignedParcelRequestRef.current.lastFetchedAt = Date.now();
+    }
+  }, []);
+
   useEffect(() => {
     fetchStats();
     fetchNotifications();
-    if (isOnline) fetchAvailableOrders();
-  }, [isOnline, activeTab]);
+    if (isOnline && activeTab === "delivery") {
+      fetchAssignedParcel();
+    }
+    if (isOnline && !user?.isBusy) fetchAvailableOrders();
+    else if (user?.isBusy) setAvailableOrders([]);
+  }, [isOnline, activeTab, user?.isBusy, fetchAssignedParcel]);
 
   const handleOnlineToggle = async () => {
     const newStatus = !isOnline;
@@ -115,6 +147,7 @@ const Dashboard = () => {
       const response = await deliveryApi.acceptReturnPickup(orderId);
       if (response.data.success) {
         toast.success("Return pickup accepted!");
+        await refreshUser();
         fetchAvailableOrders();
         // Option: navigate to details
         navigate(`/delivery/order-details/${orderId}`);
@@ -272,6 +305,26 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <div className="px-6 space-y-6">
+        {assignedParcel && (
+          <Card className="bg-brand-50/50 border border-brand-100 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-brand-600">Active Parcel Task</p>
+                <p className="text-sm font-bold text-slate-900">Continue parcel workflow</p>
+                <p className="text-xs text-slate-500 mt-0.5">Status: {assignedParcel.status}</p>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => navigate(`/delivery/parcel-task/${assignedParcel._id}`)}
+                className="h-9 px-3 text-[11px] font-black uppercase tracking-wider"
+              >
+                Open
+              </Button>
+            </div>
+          </Card>
+        )}
+
         {/* Earnings Card */}
         <Card className="bg-white shadow-sm border border-gray-100 overflow-hidden relative">
           {/* Background Decoration */}

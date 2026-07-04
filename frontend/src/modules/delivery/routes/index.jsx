@@ -22,6 +22,7 @@ import Settings from "../pages/profile/Settings";
 import HelpSupport from "../pages/profile/HelpSupport";
 import Withdrawals from "../pages/profile/Withdrawals";
 import Notifications from "../pages/Notifications";
+import ParcelTaskPage from "../pages/ParcelTaskPage";
 
 const DeliveryRoutes = () => {
   useEffect(() => {
@@ -52,6 +53,7 @@ const DeliveryRoutes = () => {
         <Route path="profile/help-support" element={<HelpSupport />} />
         <Route path="profile/withdrawals" element={<Withdrawals />} />
         <Route path="notifications" element={<Notifications />} />
+        <Route path="parcel-task/:parcelId" element={<ParcelTaskPage />} />
         <Route path="/" element={<Navigate to="dashboard" replace />} />
       </Route>
     </Routes>

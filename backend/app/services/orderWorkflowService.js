@@ -1,9 +1,15 @@
 import mongoose from "mongoose";
+import crypto from "crypto";
 import Order from "../models/order.js";
+import Customer from "../models/customer.js";
 import DeliveryAssignment from "../models/deliveryAssignment.js";
 import OrderOtp from "../models/orderOtp.js";
 import Seller from "../models/seller.js";
 import Delivery from "../models/delivery.js";
+import {
+  markDeliveryPartnerBusy,
+  clearDeliveryPartnerBusy,
+} from "./deliveryBusyService.js";
 import {
   clearOrderTracking,
   clearRiderPresence,
@@ -35,6 +41,7 @@ import {
   emitDeliveryBroadcastForSeller,
   emitReturnBroadcastForCustomer,
   emitToCustomer,
+  emitToDelivery,
   emitToOrder,
   retractDeliveryBroadcastForOrder,
 } from "./orderSocketEmitter.js";
@@ -290,6 +297,13 @@ export async function deliveryAcceptAtomic(deliveryId, orderId, idempotencyKey) 
     throw err;
   }
 
+  const partner = await Delivery.findById(deliveryOid).select("isVerified").lean();
+  if (!partner?.isVerified) {
+    const err = new Error("Your account is pending admin approval.");
+    err.statusCode = 403;
+    throw err;
+  }
+
   if (idempotencyKey) {
     try {
       const redis = getRedisClient();
@@ -400,6 +414,8 @@ export async function deliveryAcceptAtomic(deliveryId, orderId, idempotencyKey) 
     },
     updated.customer,
   );
+
+  await markDeliveryPartnerBusy(deliveryOid);
 
   return { order: updated, duplicate: false };
 }
@@ -1103,13 +1119,63 @@ export async function requestHandoffOtpAtomic(deliveryId, orderId, lat, lng) {
 
   const rider = await resolveRiderLocation(deliveryId, lat, lng);
 
-  const cust = order.address?.location;
-  if (
-    typeof cust?.lat !== "number" ||
-    typeof cust?.lng !== "number" ||
-    !Number.isFinite(cust.lat) ||
-    !Number.isFinite(cust.lng)
-  ) {
+  let cust = order.address?.location;
+  let hasCustLoc =
+    cust &&
+    typeof cust.lat === "number" &&
+    typeof cust.lng === "number" &&
+    Number.isFinite(cust.lat) &&
+    Number.isFinite(cust.lng);
+
+  if (!hasCustLoc) {
+    try {
+      const customer = await Customer.findById(order.customer).lean();
+      const fallbackAddress = customer?.addresses?.find(
+        (a) =>
+          a.label?.toLowerCase() === order.address?.type?.toLowerCase() ||
+          a.fullAddress === order.address?.address,
+      );
+
+      if (fallbackAddress?.location?.lat && fallbackAddress?.location?.lng) {
+        cust = {
+          lat: fallbackAddress.location.lat,
+          lng: fallbackAddress.location.lng,
+        };
+        hasCustLoc = true;
+        order.address = order.address || {};
+        order.address.location = cust;
+        await Order.updateOne({ _id: order._id }, { $set: { "address.location": cust } });
+      }
+    } catch (e) {
+      console.warn("[requestHandoffOtpAtomic] Failed to read fallback address from customer:", e.message);
+    }
+  }
+
+  if (!hasCustLoc) {
+    const addressText = [
+      order.address?.address,
+      order.address?.landmark,
+      order.address?.city,
+    ].filter(Boolean).join(", ");
+
+    if (addressText) {
+      try {
+        const { geocodeAddress } = await import("./mapsGeocodeService.js");
+        const geocoded = await geocodeAddress(addressText);
+        if (geocoded?.lat && geocoded?.lng) {
+          cust = { lat: geocoded.lat, lng: geocoded.lng };
+          hasCustLoc = true;
+          order.address = order.address || {};
+          order.address.location = cust;
+          await Order.updateOne({ _id: order._id }, { $set: { "address.location": cust } });
+        }
+      } catch (geocodeErr) {
+        console.warn(`[requestHandoffOtpAtomic] Geocode fallback failed for order ${orderId}:`, geocodeErr.message);
+      }
+    }
+  }
+
+  if (!hasCustLoc) {
     const err = new Error("Customer address coordinates missing");
     err.statusCode = 400;
     err.code = "ORDER_LOCATION_REQUIRED";
@@ -1143,7 +1209,7 @@ export async function requestHandoffOtpAtomic(deliveryId, orderId, lat, lng) {
     }
   }
 
-  const code = String(Math.floor(1000 + Math.random() * 9000)).padStart(4, "0");
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
   const codeHash = OrderOtp.hashCode(code);
 
   // Mark previous OTPs as consumed (legacy parity) instead of deleting,
@@ -1230,8 +1296,8 @@ export async function verifyHandoffOtpAndDeliver(deliveryId, orderId, code) {
     err.code = "OTP_INVALID_FORMAT";
     throw err;
   }
-  if (!/^\d{4}$/.test(code)) {
-    const err = new Error("OTP must be exactly 4 digits");
+  if (!/^\d{6}$/.test(code)) {
+    const err = new Error("OTP must be exactly 6 digits");
     err.statusCode = 400;
     err.code = "OTP_INVALID_FORMAT";
     throw err;
@@ -1412,6 +1478,7 @@ export async function verifyHandoffOtpAndDeliver(deliveryId, orderId, code) {
   // showing this rider as "live on order".
   clearOrderTracking(orderId).catch(() => {});
   clearRiderPresence(deliveryId).catch(() => {});
+  clearDeliveryPartnerBusy(deliveryId).catch(() => {});
 
   emitOrderStatusUpdate(
     orderId,
@@ -1432,6 +1499,10 @@ export async function verifyHandoffOtpAndDeliver(deliveryId, orderId, code) {
     payload: validatedPayload,
   });
   emitToOrder(orderId, {
+    event: "delivery:otp:validated",
+    payload: validatedPayload,
+  });
+  emitToDelivery(deliveryId, {
     event: "delivery:otp:validated",
     payload: validatedPayload,
   });

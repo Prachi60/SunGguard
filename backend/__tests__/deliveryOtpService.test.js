@@ -67,7 +67,7 @@ describe('deliveryOtpService', () => {
 
       expect(result.success).toBe(true);
       expect(result.otp).toBeDefined();
-      expect(result.otp).toMatch(/^\d{4}$/); // 4-digit OTP
+      expect(result.otp).toMatch(/^\d{6}$/); // 6-digit OTP
       expect(result.expiresAt).toBeInstanceOf(Date);
       expect(result.error).toBeUndefined();
 
@@ -89,7 +89,7 @@ describe('deliveryOtpService', () => {
         orderMongoId: 'order-mongo-id',
         type: 'delivery',
         codeHash: 'hashed-otp-value',
-        code: expect.stringMatching(/^\d{4}$/),
+        code: expect.stringMatching(/^\d{6}$/),
         expiresAt: expect.any(Date),
         attempts: 0,
         maxAttempts: 3,
@@ -167,7 +167,7 @@ describe('deliveryOtpService', () => {
       expect(result.otp).toBeUndefined();
     });
 
-    it('should generate OTP with exactly 4 digits', async () => {
+    it('should generate OTP with exactly 6 digits', async () => {
       mockOrderFindOne.mockResolvedValue({
         _id: 'order-mongo-id',
         orderId: validOrderId,
@@ -188,8 +188,8 @@ describe('deliveryOtpService', () => {
       const result = await generateDeliveryOtp(validOrderId, validDeliveryLocation);
 
       expect(result.success).toBe(true);
-      expect(result.otp).toMatch(/^\d{4}$/);
-      expect(result.otp.length).toBe(4);
+      expect(result.otp).toMatch(/^\d{6}$/);
+      expect(result.otp.length).toBe(6);
     });
 
     it('should set expiration time to 10 minutes from now', async () => {
@@ -302,7 +302,7 @@ describe('deliveryOtpService', () => {
 
   describe('validateDeliveryOtp', () => {
     const validOrderId = 'ORD123456';
-    const validOtp = '1234';
+    const validOtp = '123456';
     const validOtpHash = crypto.createHash('sha256').update(validOtp).digest('hex');
 
     beforeEach(() => {
@@ -352,12 +352,12 @@ describe('deliveryOtpService', () => {
       expect(result.message).toBe('OTP is required');
     });
 
-    it('should fail when OTP format is invalid (not 4 digits)', async () => {
+    it('should fail when OTP format is invalid (not 6 digits)', async () => {
       const invalidOtps = [
-        { otp: '123', expectedMessage: 'OTP must be exactly 4 digits' },
-        { otp: '12345', expectedMessage: 'OTP must be exactly 4 digits' },
-        { otp: 'abcd', expectedMessage: 'OTP must be exactly 4 digits' },
-        { otp: '12a4', expectedMessage: 'OTP must be exactly 4 digits' },
+        { otp: '12345', expectedMessage: 'OTP must be exactly 6 digits' },
+        { otp: '1234567', expectedMessage: 'OTP must be exactly 6 digits' },
+        { otp: 'abcdef', expectedMessage: 'OTP must be exactly 6 digits' },
+        { otp: '123a56', expectedMessage: 'OTP must be exactly 6 digits' },
         { otp: '', expectedMessage: 'OTP is required' }
       ];
 
@@ -427,7 +427,7 @@ describe('deliveryOtpService', () => {
     });
 
     it('should fail when OTP does not match and increment attempts', async () => {
-      const wrongOtp = '5678';
+      const wrongOtp = '567890';
       const mockOtpRecord = {
         orderId: validOrderId,
         codeHash: validOtpHash, // Hash of '1234'
@@ -453,7 +453,7 @@ describe('deliveryOtpService', () => {
     });
 
     it('should track attempts correctly across multiple failures', async () => {
-      const wrongOtp = '5678';
+      const wrongOtp = '567890';
       const mockOtpRecord = {
         orderId: validOrderId,
         codeHash: validOtpHash,

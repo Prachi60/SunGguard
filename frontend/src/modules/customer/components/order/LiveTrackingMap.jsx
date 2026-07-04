@@ -68,7 +68,7 @@ const LiveTrackingMap = memo(({
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 
   const { isLoaded, loadError } = useJsApiLoader({
-    id: "customer-tracking-map",
+    id: "google-map-script",
     googleMapsApiKey: apiKey,
     libraries,
   });

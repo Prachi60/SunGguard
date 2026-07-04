@@ -3,16 +3,22 @@ import { verifyToken, allowRoles } from "../middleware/authMiddleware.js";
 import {
   calculateFare,
   createParcel,
+  getBookingConfig,
   getParcelHistory,
   trackParcel,
+  cancelParcelByCustomer,
   adminGetParcels,
   adminAssignRider,
   adminGetPricingConfig,
   adminUpdatePricingConfig,
   adminGetReports,
   adminGetActiveDeliveries,
+  adminResetAllParcelData,
   adminGetRiders,
   riderGetAssignedParcels,
+  riderGetAvailableParcels,
+  riderAcceptParcel,
+  riderRejectParcel,
   riderUpdateStatus,
   riderCompleteDelivery,
   riderGetEarnings
@@ -25,8 +31,10 @@ const router = express.Router();
    ========================================================================== */
 router.post("/calculate-fare", verifyToken, calculateFare);
 router.post("/create", verifyToken, createParcel);
+router.get("/booking-config", verifyToken, getBookingConfig);
 router.get("/history", verifyToken, getParcelHistory);
 router.get("/track/:id", verifyToken, trackParcel);
+router.post("/cancel/:parcelId", verifyToken, cancelParcelByCustomer);
 
 /* ==========================================================================
    ADMIN API ROUTES
@@ -37,12 +45,21 @@ router.get("/admin/pricing", verifyToken, allowRoles("admin", "parcel_admin"), a
 router.put("/admin/pricing", verifyToken, allowRoles("admin", "parcel_admin"), adminUpdatePricingConfig);
 router.get("/admin/reports", verifyToken, allowRoles("admin", "parcel_admin"), adminGetReports);
 router.get("/admin/active", verifyToken, allowRoles("admin", "parcel_admin"), adminGetActiveDeliveries);
+router.post(
+  "/admin/reset-data",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminResetAllParcelData,
+);
 router.get("/admin/riders", verifyToken, allowRoles("admin", "parcel_admin"), adminGetRiders);
 
 /* ==========================================================================
    DELIVERY PARTNER API ROUTES
    ========================================================================== */
 router.get("/rider/assigned", verifyToken, allowRoles("delivery"), riderGetAssignedParcels);
+router.get("/rider/available", verifyToken, allowRoles("delivery"), riderGetAvailableParcels);
+router.post("/rider/accept/:parcelId", verifyToken, allowRoles("delivery"), riderAcceptParcel);
+router.post("/rider/reject/:parcelId", verifyToken, allowRoles("delivery"), riderRejectParcel);
 router.put("/rider/status", verifyToken, allowRoles("delivery"), riderUpdateStatus);
 router.put("/rider/complete", verifyToken, allowRoles("delivery"), riderCompleteDelivery);
 router.get("/rider/earnings", verifyToken, allowRoles("delivery"), riderGetEarnings);

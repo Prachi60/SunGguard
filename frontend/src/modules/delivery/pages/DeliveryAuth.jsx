@@ -17,6 +17,9 @@ import {
   Camera,
   XCircle,
   Sparkles,
+  Truck,
+  Package,
+  Store,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Lottie from "lottie-react";
@@ -32,6 +35,153 @@ const VEHICLE_TYPES = [
   { value: "scooter", label: "Scooter" },
   { value: "cycle", label: "Cycle" },
 ];
+
+const SERVICE_TYPES = [
+  { value: "parcel", label: "Parcel", description: "Courier pick-ups & drops", icon: Package },
+  { value: "quick-orders", label: "Quick Orders", description: "Store & marketplace orders", icon: Store },
+  { value: "both", label: "Both", description: "Parcel and quick orders", icon: Truck },
+];
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const VEHICLE_PLATE_REGEX = /^[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}$/;
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const AADHAR_REGEX = /^[0-9]{12}$/;
+const DL_REGEX = /^(DL[0-9]{13}|[A-Z]{2}[0-9]{2}[0-9]{4}[0-9]{7})$/;
+
+const sanitizeFullName = (value) =>
+  value.replace(/[^A-Za-z\s.'-]/g, "").replace(/\s+/g, " ");
+
+const formatVehiclePlate = (value) => {
+  const raw = value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  let plate = "";
+
+  for (let i = 0; i < raw.length && plate.length < 10; i += 1) {
+    const char = raw[i];
+    const pos = plate.length;
+
+    if (pos < 2 || (pos >= 4 && pos < 6)) {
+      if (/[A-Z]/.test(char)) plate += char;
+    } else if ((pos >= 2 && pos < 4) || pos >= 6) {
+      if (/[0-9]/.test(char)) plate += char;
+    }
+  }
+
+  if (plate.length <= 2) return plate;
+  if (plate.length <= 4) return `${plate.slice(0, 2)} ${plate.slice(2)}`;
+  if (plate.length <= 6) return `${plate.slice(0, 2)} ${plate.slice(2, 4)} ${plate.slice(4)}`;
+  return `${plate.slice(0, 2)} ${plate.slice(2, 4)} ${plate.slice(4, 6)} ${plate.slice(6)}`;
+};
+
+const normalizeVehiclePlate = (value) => value.replace(/\s/g, "").toUpperCase();
+
+const formatDrivingLicense = (value) => {
+  const upper = value.toUpperCase();
+  if (upper.startsWith("DL")) {
+    const digits = upper.slice(2).replace(/[^0-9]/g, "").slice(0, 13);
+    return digits ? `DL-${digits}` : "DL-";
+  }
+
+  const raw = upper.replace(/[^A-Z0-9]/g, "");
+  let dl = "";
+
+  for (let i = 0; i < raw.length && dl.length < 15; i += 1) {
+    const char = raw[i];
+    const pos = dl.length;
+
+    if (pos < 2) {
+      if (/[A-Z]/.test(char)) dl += char;
+    } else {
+      if (/[0-9]/.test(char)) dl += char;
+    }
+  }
+
+  return dl;
+};
+
+const normalizeDrivingLicense = (value) => value.replace(/[\s-]/g, "").toUpperCase();
+
+const formatPanNumber = (value) => {
+  const raw = value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  let pan = "";
+
+  for (let i = 0; i < raw.length && pan.length < 10; i += 1) {
+    const char = raw[i];
+    const pos = pan.length;
+
+    if (pos < 5) {
+      if (/[A-Z]/.test(char)) pan += char;
+    } else if (pos < 9) {
+      if (/[0-9]/.test(char)) pan += char;
+    } else if (/[A-Z]/.test(char)) {
+      pan += char;
+    }
+  }
+
+  return pan;
+};
+
+const extractAadharDigits = (text) => {
+  const matches = String(text || "").replace(/\D/g, "").match(/\d{12}/g);
+  return matches?.[0] || "";
+};
+
+const extractPanFromText = (text) => {
+  const match = String(text || "").toUpperCase().match(/[A-Z]{5}\d{4}[A-Z]/);
+  return match ? match[0] : "";
+};
+
+const isValidFullName = (value) => {
+  const trimmed = value.trim();
+  return trimmed.length >= 2 && /^[A-Za-z]+(?:[ '.-][A-Za-z]+)*$/.test(trimmed);
+};
+
+const validateSignupStep1 = ({ signupName, signupPhone, signupEmail, signupAddress, profileImageFile, signupServiceType }) => {
+  if (!signupName.trim() || !signupPhone || !signupEmail || !signupAddress || !profileImageFile) {
+    return "Please fill all personal information fields and upload photo";
+  }
+  if (!isValidFullName(signupName)) {
+    return "Full name should contain only letters (no numbers)";
+  }
+  if (signupPhone.length !== 10) {
+    return "Please enter a valid 10-digit phone number";
+  }
+  if (!EMAIL_REGEX.test(signupEmail)) {
+    return "Please enter a valid email address";
+  }
+  if (!signupServiceType) {
+    return "Please select which services you will serve";
+  }
+  return null;
+};
+
+const validateSignupStep2 = ({ signupVehicleNumber, signupDLNumber }) => {
+  if (!signupVehicleNumber.trim()) {
+    return "Please enter your vehicle plate number";
+  }
+  if (!VEHICLE_PLATE_REGEX.test(normalizeVehiclePlate(signupVehicleNumber))) {
+    return "Vehicle plate must be 2 letters, 2 digits, 2 letters, then 4 digits (e.g. KA 05 MN 8921)";
+  }
+  if (!signupDLNumber.trim()) {
+    return "Please enter your driving license number";
+  }
+  if (!DL_REGEX.test(normalizeDrivingLicense(signupDLNumber))) {
+    return "Driving license must be DL- followed by 13 digits, or 15-character state format";
+  }
+  return null;
+};
+
+const validateSignupStep3 = ({ signupAadharNumber, signupPanNumber, signupAccountHolder, signupAccountNumber, signupIfsc }) => {
+  if (!signupAadharNumber || !signupPanNumber || !signupAccountHolder || !signupAccountNumber || !signupIfsc) {
+    return "Please fill all bank and identification fields";
+  }
+  if (!AADHAR_REGEX.test(signupAadharNumber)) {
+    return "Aadhar number must be exactly 12 digits";
+  }
+  if (!PAN_REGEX.test(signupPanNumber)) {
+    return "PAN must be 5 letters, 4 digits, then 1 letter (e.g. ABCDE1234F)";
+  }
+  return null;
+};
 
 const DeliveryAuth = () => {
   const navigate = useNavigate();
@@ -61,7 +211,7 @@ const DeliveryAuth = () => {
   const [signupAccountNumber, setSignupAccountNumber] = useState("");
   const [signupIfsc, setSignupIfsc] = useState("");
   const [signupAccountHolder, setSignupAccountHolder] = useState("");
-  const [signupParcelService, setSignupParcelService] = useState(true);
+  const [signupServiceType, setSignupServiceType] = useState("");
   const [showVehicleDropdown, setShowVehicleDropdown] = useState(false);
   const [profileImageFile, setProfileImageFile] = useState(null);
   const [profileImagePreview, setProfileImagePreview] = useState("");
@@ -145,7 +295,14 @@ const DeliveryAuth = () => {
           toast.error("DL Number mismatch. Make sure you typed the exact number from the photo.");
         }
       } else if (type === "pan") {
-        targetNumber = signupPanNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const extractedPan = extractPanFromText(rawText);
+        const enteredPan = signupPanNumber.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const effectivePan = enteredPan.length === 10 ? enteredPan : extractedPan;
+        if (effectivePan.length === 10 && enteredPan.length !== 10) {
+          setSignupPanNumber(effectivePan);
+        }
+
+        targetNumber = effectivePan.toLowerCase();
         const normalizedTarget = normalize(targetNumber);
 
         const panKeywords = ["permanent", "account", "income", "tax", "department", "india", "signature", "card", "govt"];
@@ -164,7 +321,15 @@ const DeliveryAuth = () => {
           toast.error("PAN mismatch. Photo must be clear and show the PAN number.");
         }
       } else if (type === "aadhar") {
-        targetNumber = signupAadharNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const extractedAadhar = extractAadharDigits(rawText);
+        const enteredAadhar = signupAadharNumber.replace(/\D/g, "");
+        const effectiveAadhar =
+          enteredAadhar.length === 12 ? enteredAadhar : extractedAadhar;
+        if (effectiveAadhar.length === 12 && enteredAadhar.length !== 12) {
+          setSignupAadharNumber(effectiveAadhar);
+        }
+
+        targetNumber = effectiveAadhar.toLowerCase();
         const normalizedTarget = normalize(targetNumber);
 
         const aadharKeywords = ["government", "india", "male", "female", "unique", "identification", "authority", "enrollment", "birth", "dob", "address", "आधार", "भारत"];
@@ -217,22 +382,44 @@ const DeliveryAuth = () => {
         const res = await deliveryApi.sendLoginOtp({ phone: loginPhone });
         toast.success(res.data?.message || "OTP sent!");
       } else {
-        if (!signupName.trim()) { toast.error("Please enter your name"); return; }
-        if (!signupPhone || signupPhone.length < 10) { toast.error("Please enter a valid 10-digit phone number"); return; }
-        if (!profileImageFile) { toast.error("Please upload your profile photo"); return; }
+        const step1Error = validateSignupStep1({
+          signupName,
+          signupPhone,
+          signupEmail,
+          signupAddress,
+          profileImageFile,
+          signupServiceType,
+        });
+        if (step1Error) { toast.error(step1Error); return; }
+
+        const step2Error = validateSignupStep2({ signupVehicleNumber, signupDLNumber });
+        if (step2Error) { toast.error(step2Error); return; }
+
+        const step3Error = validateSignupStep3({
+          signupAadharNumber,
+          signupPanNumber,
+          signupAccountHolder,
+          signupAccountNumber,
+          signupIfsc,
+        });
+        if (step3Error) { toast.error(step3Error); return; }
 
         const formData = new FormData();
         formData.append("name", signupName.trim());
         formData.append("phone", signupPhone);
         formData.append("vehicleType", signupVehicle);
-        formData.append("email", signupEmail);
+        formData.append("email", signupEmail.trim().toLowerCase());
         formData.append("address", signupAddress);
-        formData.append("vehicleNumber", signupVehicleNumber);
-        formData.append("drivingLicenseNumber", signupDLNumber);
+        formData.append("vehicleNumber", normalizeVehiclePlate(signupVehicleNumber));
+        formData.append("drivingLicenseNumber", normalizeDrivingLicense(signupDLNumber));
         formData.append("accountHolder", signupAccountHolder);
         formData.append("accountNumber", signupAccountNumber);
         formData.append("ifsc", signupIfsc);
-        formData.append("isParcelService", signupParcelService);
+        formData.append("aadharNumber", signupAadharNumber);
+        formData.append("aadhar_number", signupAadharNumber);
+        formData.append("panNumber", signupPanNumber);
+        formData.append("pan_number", signupPanNumber);
+        formData.append("serviceType", signupServiceType);
 
         if (profileImageFile) formData.append("profileImage", profileImageFile);
         if (aadharFile) formData.append("aadhar", aadharFile);
@@ -264,8 +451,13 @@ const DeliveryAuth = () => {
 
       login({ ...delivery, token, role: "delivery" });
 
-      toast.success("Welcome! Redirecting to dashboard...");
-      navigate("/delivery/dashboard");
+      if (delivery?.isVerified) {
+        toast.success("Welcome! Redirecting to dashboard...");
+        navigate("/delivery/dashboard");
+      } else {
+        toast.success("Registration complete! Your application is pending admin approval.");
+        navigate("/delivery/pending-approval");
+      }
     } catch (error) {
       console.error(error);
       toast.error(error.response?.data?.message || "Invalid OTP");
@@ -303,7 +495,9 @@ const DeliveryAuth = () => {
     setSignupVehicle("bike");
     setSignupVehicleNumber("");
     setSignupDLNumber("");
-    setSignupParcelService(true);
+    setSignupServiceType("");
+    setSignupAadharNumber("");
+    setSignupPanNumber("");
     setSignupAccountNumber("");
     setSignupIfsc("");
     setSignupAccountHolder("");
@@ -464,11 +658,12 @@ const DeliveryAuth = () => {
                               <input
                                 type="text"
                                 value={signupName}
-                                onChange={(e) => setSignupName(e.target.value)}
+                                onChange={(e) => setSignupName(sanitizeFullName(e.target.value))}
                                 className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all"
                                 placeholder="Enter your full name"
                               />
                             </div>
+                            <p className="text-[10px] text-gray-400 font-bold ml-1">Letters and spaces only</p>
                           </div>
 
                           <div className="space-y-1.5">
@@ -494,9 +689,11 @@ const DeliveryAuth = () => {
                               <input
                                 type="email"
                                 value={signupEmail}
-                                onChange={(e) => setSignupEmail(e.target.value)}
-                                className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all"
+                                onChange={(e) => setSignupEmail(e.target.value.toLowerCase())}
+                                className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all lowercase"
                                 placeholder="example@gmail.com"
+                                autoCapitalize="none"
+                                autoCorrect="off"
                               />
                             </div>
                           </div>
@@ -514,14 +711,48 @@ const DeliveryAuth = () => {
                             </div>
                           </div>
 
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">Services You Will Serve</label>
+                            <div className="grid grid-cols-1 gap-2 mt-1">
+                              {SERVICE_TYPES.map((service) => {
+                                const Icon = service.icon;
+                                const isSelected = signupServiceType === service.value;
+                                return (
+                                  <button
+                                    key={service.value}
+                                    type="button"
+                                    onClick={() => setSignupServiceType(service.value)}
+                                    className={`py-3.5 px-4 rounded-2xl text-left transition-all border-2 flex items-center gap-3 ${
+                                      isSelected
+                                        ? "bg-brand-50 border-brand-500 text-brand-600 shadow-sm"
+                                        : "bg-gray-50 border-gray-100 text-gray-500 hover:text-gray-600 hover:bg-gray-100/50"
+                                    }`}
+                                  >
+                                    <div className={`p-2 rounded-xl ${isSelected ? "bg-brand-100" : "bg-white"}`}>
+                                      <Icon className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                      <span className="block text-xs font-black">{service.label}</span>
+                                      <span className="text-[10px] font-bold opacity-80 block">{service.description}</span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
                           <button
                             onClick={() => {
-                              if (!signupName || !signupPhone || !signupEmail || !signupAddress || !profileImageFile) {
-                                toast.error("Please fill all personal information fields and upload photo");
-                                return;
-                              }
-                              if (signupPhone.length !== 10) {
-                                toast.error("Please enter a valid 10-digit phone number");
+                              const error = validateSignupStep1({
+                                signupName,
+                                signupPhone,
+                                signupEmail,
+                                signupAddress,
+                                profileImageFile,
+                                signupServiceType,
+                              });
+                              if (error) {
+                                toast.error(error);
                                 return;
                               }
                               setSignupStep(2);
@@ -582,11 +813,13 @@ const DeliveryAuth = () => {
                               <input
                                 type="text"
                                 value={signupVehicleNumber}
-                                onChange={(e) => setSignupVehicleNumber(e.target.value.toUpperCase())}
-                                className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all"
+                                onChange={(e) => setSignupVehicleNumber(formatVehiclePlate(e.target.value))}
+                                className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all uppercase"
                                 placeholder="KA 05 MN 8921"
+                                maxLength={13}
                               />
                             </div>
+                            <p className="text-[10px] text-gray-400 font-bold ml-1">Format: 2 letters · 2 digits · 2 letters · 4 digits</p>
                           </div>
 
                           <div className="space-y-1.5">
@@ -596,41 +829,13 @@ const DeliveryAuth = () => {
                               <input
                                 type="text"
                                 value={signupDLNumber}
-                                onChange={(e) => setSignupDLNumber(e.target.value.toUpperCase())}
-                                className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all"
+                                onChange={(e) => setSignupDLNumber(formatDrivingLicense(e.target.value))}
+                                className="w-full pl-11 pr-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all uppercase"
                                 placeholder="DL-1420110012345"
+                                maxLength={16}
                               />
                             </div>
-                          </div>
-
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">Services You Provide</label>
-                            <div className="grid grid-cols-2 gap-3 mt-1">
-                              <button
-                                type="button"
-                                onClick={() => setSignupParcelService(true)}
-                                className={`py-3.5 px-4 rounded-2xl text-xs font-black transition-all border-2 text-center flex flex-col items-center justify-center gap-1 ${
-                                  signupParcelService
-                                    ? "bg-brand-50 border-brand-500 text-brand-600 shadow-sm"
-                                    : "bg-gray-50 border-gray-100 text-gray-400 hover:text-gray-500 hover:bg-gray-100/50"
-                                }`}
-                              >
-                                <span className="block">Store & Parcels</span>
-                                <span className="text-[9px] font-bold opacity-80 block">All orders</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setSignupParcelService(false)}
-                                className={`py-3.5 px-4 rounded-2xl text-xs font-black transition-all border-2 text-center flex flex-col items-center justify-center gap-1 ${
-                                  !signupParcelService
-                                    ? "bg-brand-50 border-brand-500 text-brand-600 shadow-sm"
-                                    : "bg-gray-50 border-gray-100 text-gray-400 hover:text-gray-500 hover:bg-gray-100/50"
-                                }`}
-                              >
-                                <span className="block">Store Orders Only</span>
-                                <span className="text-[9px] font-bold opacity-80 block">No point-to-point</span>
-                              </button>
-                            </div>
+                            <p className="text-[10px] text-gray-400 font-bold ml-1">Format: DL- followed by 13 digits</p>
                           </div>
 
                           <div className="flex gap-4 pt-2">
@@ -642,12 +847,9 @@ const DeliveryAuth = () => {
                             </button>
                             <button
                               onClick={() => {
-                                if (!signupVehicleNumber) {
-                                  toast.error("Please enter your vehicle plate number");
-                                  return;
-                                }
-                                if (!signupDLNumber) {
-                                  toast.error("Please enter your driving license number");
+                                const error = validateSignupStep2({ signupVehicleNumber, signupDLNumber });
+                                if (error) {
+                                  toast.error(error);
                                   return;
                                 }
                                 setSignupStep(3);
@@ -671,21 +873,26 @@ const DeliveryAuth = () => {
                             <label className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">Aadhar Number</label>
                             <input
                               type="text"
+                              inputMode="numeric"
                               value={signupAadharNumber}
                               onChange={(e) => setSignupAadharNumber(e.target.value.replace(/\D/g, "").slice(0, 12))}
                               className="w-full px-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all font-mono"
                               placeholder="0000 0000 0000"
+                              maxLength={12}
                             />
+                            <p className="text-[10px] text-gray-400 font-bold ml-1">12 digits only</p>
                           </div>
                           <div className="space-y-1.5">
                             <label className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">PAN Card Number</label>
                             <input
                               type="text"
                               value={signupPanNumber}
-                              onChange={(e) => setSignupPanNumber(e.target.value.toUpperCase().slice(0, 10))}
-                              className="w-full px-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all font-mono"
+                              onChange={(e) => setSignupPanNumber(formatPanNumber(e.target.value))}
+                              className="w-full px-4 py-3.5 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-400 transition-all font-mono uppercase"
                               placeholder="ABCDE1234F"
+                              maxLength={10}
                             />
+                            <p className="text-[10px] text-gray-400 font-bold ml-1">Format: 5 letters · 4 digits · 1 letter</p>
                           </div>
                           <div className="space-y-1.5">
                             <label className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">Account Holder Name</label>
@@ -727,16 +934,15 @@ const DeliveryAuth = () => {
                             </button>
                             <button
                               onClick={() => {
-                                if (!signupAadharNumber || !signupPanNumber || !signupAccountHolder || !signupAccountNumber || !signupIfsc) {
-                                  toast.error("Please fill all bank and identification fields");
-                                  return;
-                                }
-                                if (signupAadharNumber.length !== 12) {
-                                  toast.error("Aadhar number must be 12 digits");
-                                  return;
-                                }
-                                if (signupPanNumber.length !== 10) {
-                                  toast.error("PAN number must be 10 characters");
+                                const error = validateSignupStep3({
+                                  signupAadharNumber,
+                                  signupPanNumber,
+                                  signupAccountHolder,
+                                  signupAccountNumber,
+                                  signupIfsc,
+                                });
+                                if (error) {
+                                  toast.error(error);
                                   return;
                                 }
                                 setSignupStep(4);
@@ -769,8 +975,10 @@ const DeliveryAuth = () => {
                                   className="hidden"
                                   accept="image/*"
                                   onChange={(e) => {
-                                    const file = e.target.files[0];
-                                    if (file) doc.setter(file);
+                                    const file = e.target.files?.[0] || null;
+                                    if (doc.id === "aadhar") handleAadharUpload(file);
+                                    else if (doc.id === "pan") handlePanUpload(file);
+                                    else if (doc.id === "dl") handleDLUpload(file);
                                   }}
                                 />
                                 <label

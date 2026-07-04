@@ -13,6 +13,17 @@ function buildDeliveryFilter() {
   return {
     isOnline: true,
     isVerified: true,
+    isQuickCommerceService: true,
+    isBusy: { $ne: true },
+  };
+}
+
+function buildParcelDeliveryFilter() {
+  return {
+    isOnline: true,
+    isVerified: true,
+    isParcelService: true,
+    isBusy: { $ne: true },
   };
 }
 
@@ -148,4 +159,51 @@ export async function getDeliveryPartnerIdsWithinCustomerRadius(customerLocation
   const lat = customerLocation?.lat;
   const lng = customerLocation?.lng;
   return getDeliveryPartnerIdsWithinRadius(lat, lng, radiusKm);
+}
+
+/**
+ * Parcel-capable riders near a pickup point.
+ * Includes riders who selected "parcel" or "both" (`isParcelService: true`).
+ * Uses Haversine over all eligible online riders so nobody in-radius is missed
+ * by geo-index quirks.
+ */
+export async function getParcelRiderIdsNearPickup(lat, lng, radiusKm = 5) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+
+  const safeRadiusKm = Math.min(Math.max(Number(radiusKm) || 5, 1), 100);
+  const maxDistanceM = safeRadiusKm * 1000;
+  const base = buildParcelDeliveryFilter();
+
+  try {
+    // All online + verified + parcel/both + free riders with a location fix.
+    const candidates = await Delivery.find({
+      ...base,
+      "location.coordinates.0": { $exists: true },
+      "location.coordinates.1": { $exists: true },
+    })
+      .select("_id location")
+      .limit(HAVERSINE_FALLBACK_LIMIT())
+      .lean();
+
+    return filterByHaversine(candidates, lat, lng, maxDistanceM);
+  } catch (e) {
+    console.warn("[deliveryNearby] parcel radius scan failed:", e.message);
+    return [];
+  }
+}
+
+/**
+ * Every currently eligible parcel/both rider (no geo filter).
+ * Used only when nobody is found inside the configured radius.
+ */
+export async function getAllEligibleParcelRiderIds() {
+  try {
+    const riders = await Delivery.find(buildParcelDeliveryFilter())
+      .select("_id")
+      .lean();
+    return riders.map((r) => String(r._id));
+  } catch (e) {
+    console.warn("[deliveryNearby] all parcel riders failed:", e.message);
+    return [];
+  }
 }

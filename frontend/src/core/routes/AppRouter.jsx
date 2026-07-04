@@ -19,6 +19,7 @@ import Auth from '../../modules/seller/pages/Auth';
 import ApplicationPending from '../../modules/seller/pages/ApplicationPending';
 import AdminAuth from '../../modules/admin/pages/AdminAuth';
 import DeliveryAuth from '../../modules/delivery/pages/DeliveryAuth';
+import DeliveryApplicationPending from '../../modules/delivery/pages/ApplicationPending';
 import CarWashPartnerAuth from '../../modules/delivery/pages/CarWashPartnerAuth';
 import CarWashPartnerDashboard from '../../modules/delivery/pages/CarWashPartnerDashboard';
 import CustomerAuth from '../../modules/customer/pages/CustomerAuth';
@@ -48,6 +49,7 @@ const PaymentStatusPage = lazy(() => import('../../modules/customer/pages/Paymen
 const SearchPage = lazy(() => import('../../modules/customer/pages/SearchPage'));
 const WalletPage = lazy(() => import('../../modules/customer/pages/WalletPage'));
 const ParcelDeliveryPage = lazy(() => import('../../modules/customer/pages/ParcelDeliveryPage'));
+const ParcelSearchTrackingPage = lazy(() => import('../../modules/customer/pages/ParcelSearchTrackingPage'));
 const CarWashBookingPage = lazy(() => import('../../modules/customer/pages/CarWashBookingPage'));
 const CarWashTrackingPage = lazy(() => import('../../modules/customer/pages/CarWashTrackingPage'));
 
@@ -114,6 +116,14 @@ const AppRouter = () => {
                 {
                     path: 'delivery/auth',
                     element: <DeliveryAuth />,
+                },
+                {
+                    path: 'delivery/pending-approval',
+                    element: (
+                        <ProtectedRoute>
+                            <DeliveryApplicationPending />
+                        </ProtectedRoute>
+                    ),
                 },
                 {
                     path: 'delivery/car-wash-auth',
@@ -193,6 +203,7 @@ const AppRouter = () => {
                         { path: 'profile/edit', element: <ProtectedRoute><EditProfilePage /></ProtectedRoute> },
                         { path: 'wallet', element: <ProtectedRoute><WalletPage /></ProtectedRoute> },
                         { path: 'parcel', element: <ProtectedRoute><ParcelDeliveryPage /></ProtectedRoute> },
+                        { path: 'parcel/search/:id', element: <ProtectedRoute><ParcelSearchTrackingPage /></ProtectedRoute> },
                         { path: 'car-wash', element: <ProtectedRoute><CarWashBookingPage /></ProtectedRoute> },
                         { path: 'car-wash/track/:id', element: <ProtectedRoute><CarWashTrackingPage /></ProtectedRoute> },
 

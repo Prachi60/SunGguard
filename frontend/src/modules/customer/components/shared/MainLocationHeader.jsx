@@ -15,6 +15,7 @@ import {
   shiftHex,
 } from "../../utils/headerTheme";
 import LogoImage from "../../../../assets/Logo.png";
+import { Package, Car } from "lucide-react";
 
 // MUI Icons
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
@@ -417,8 +418,29 @@ const MainLocationHeader = ({
               </motion.div>
             </div>
 
-            {/* Right Section: Action Icons */}
-            <div className="flex items-center gap-5 lg:gap-8 shrink-0">
+            {/* Right Section: Services + Action Icons */}
+            <div className="flex items-center gap-3 lg:gap-5 shrink-0">
+              <div className="flex items-center gap-2 mr-1 lg:mr-2">
+                <button
+                  type="button"
+                  onClick={() => navigate("/parcel")}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-white/35 hover:bg-white/70 border border-black/10 text-[12px] font-black uppercase tracking-wide transition-all active:scale-95"
+                  style={{ color: headerFontColor }}
+                >
+                  <Package size={15} strokeWidth={2.5} />
+                  Parcel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate("/car-wash")}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-white/35 hover:bg-white/70 border border-black/10 text-[12px] font-black uppercase tracking-wide transition-all active:scale-95"
+                  style={{ color: headerFontColor }}
+                >
+                  <Car size={15} strokeWidth={2.5} />
+                  Car Wash
+                </button>
+              </div>
+
               <motion.button
                 whileHover={{ scale: 1.15, rotate: 5 }}
                 whileTap={{ scale: 0.9 }}

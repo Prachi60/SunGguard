@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   MapPin,
@@ -22,13 +22,24 @@ import { toast } from 'sonner';
 import { parcelApi } from '../services/parcelApi';
 import MapPicker from '../../../shared/components/MapPicker';
 import { useAuth } from '@core/context/AuthContext';
+import { getOrderSocket, onParcelStatusUpdate } from '@/core/services/orderSocket';
+import { createSocketTokenReader } from '@core/utils/authStorage';
+import { STORAGE_KEYS } from '@core/utils/storage';
 import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from '@react-google-maps/api';
+
+const getCustomerToken = createSocketTokenReader(STORAGE_KEYS.AUTH_CUSTOMER);
+
+const formatParcelStatusLabel = (status) => {
+  if (status === 'SEARCHING') return 'Searching for rider';
+  if (status === 'REQUESTED') return 'Waiting for rider';
+  return status;
+};
 
 const libraries = ["places"];
 
 const LiveTrackingMap = ({ pickupAddress, dropAddress, deliveryPartner }) => {
   const { isLoaded } = useJsApiLoader({
-    id: "google-map-script-live-tracking",
+    id: "google-map-script",
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     libraries,
   });
@@ -155,11 +166,34 @@ const ParcelDeliveryPage = () => {
     lng: null
   });
 
-  const [packageType, setPackageType] = useState('document');
-  const [weight, setWeight] = useState(0.2); // Default weight in KG
+  const [packageTypes, setPackageTypes] = useState([
+    { value: "document", label: "Document / Paper" },
+    { value: "food", label: "Food Items" },
+    { value: "clothes", label: "Clothes / Fabric" },
+    { value: "electronics", label: "Electronics" },
+    { value: "other", label: "Other Packets" },
+  ]);
+  const [maxWeightKg, setMaxWeightKg] = useState(5);
+  const [packageDescriptionPlaceholder, setPackageDescriptionPlaceholder] = useState(
+    "E.g. keys, critical document papers...",
+  );
+  const [packageType, setPackageType] = useState("document");
+  /** Display value only — do not clamp while typing so whole numbers work. */
+  const [weightInput, setWeightInput] = useState("0.2");
+  const [weightUnit, setWeightUnit] = useState("kg"); // 'kg' | 'gm'
   const [description, setDescription] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('COD');
-  
+
+  // Always in KG for fare API / booking payload.
+  const weightKg = useMemo(() => {
+    const n = parseFloat(String(weightInput).trim());
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    const kg = weightUnit === "gm" ? n / 1000 : n;
+    return Math.round((kg + Number.EPSILON) * 1000) / 1000;
+  }, [weightInput, weightUnit]);
+  // Alias so any leftover `weight` references don't crash the page.
+  const weight = weightKg;
+
   // Fare Estimation
   const [fareEstimation, setFareEstimation] = useState(null);
   const [estimating, setEstimating] = useState(false);
@@ -183,9 +217,31 @@ const ParcelDeliveryPage = () => {
     }
   }, []);
 
+  const fetchBookingConfig = useCallback(async () => {
+    try {
+      const response = await parcelApi.getBookingConfig();
+      if (!response.data?.success) return;
+      const cfg = response.data.result || {};
+      const types = Array.isArray(cfg.packageTypes) ? cfg.packageTypes : [];
+      if (types.length) {
+        setPackageTypes(types);
+        setPackageType((prev) =>
+          types.some((t) => t.value === prev) ? prev : types[0].value,
+        );
+      }
+      if (cfg.maxWeightKg != null) setMaxWeightKg(Number(cfg.maxWeightKg) || 5);
+      if (cfg.packageDescriptionPlaceholder) {
+        setPackageDescriptionPlaceholder(cfg.packageDescriptionPlaceholder);
+      }
+    } catch (error) {
+      console.error("Failed to load parcel booking config", error);
+    }
+  }, []);
+
   useEffect(() => {
     fetchHistory();
-  }, [fetchHistory]);
+    fetchBookingConfig();
+  }, [fetchHistory, fetchBookingConfig]);
 
   // Handle Fare Calculation when locations or weight change
   useEffect(() => {
@@ -195,7 +251,7 @@ const ParcelDeliveryPage = () => {
         pickupDetails.lng &&
         dropDetails.lat &&
         dropDetails.lng &&
-        weight > 0
+        weightKg > 0
       ) {
         setEstimating(true);
         try {
@@ -204,7 +260,7 @@ const ParcelDeliveryPage = () => {
             pickupLng: pickupDetails.lng,
             dropLat: dropDetails.lat,
             dropLng: dropDetails.lng,
-            weight
+            weight: weightKg,
           });
           if (res.data && res.data.success) {
             setFareEstimation(res.data.result);
@@ -219,7 +275,7 @@ const ParcelDeliveryPage = () => {
 
     const delayDebounce = setTimeout(calcFare, 500);
     return () => clearTimeout(delayDebounce);
-  }, [pickupDetails.lat, pickupDetails.lng, dropDetails.lat, dropDetails.lng, weight]);
+  }, [pickupDetails.lat, pickupDetails.lng, dropDetails.lat, dropDetails.lng, weightKg]);
 
   // Map Selection Confirmation
   const handleMapConfirm = (location) => {
@@ -258,8 +314,16 @@ const ParcelDeliveryPage = () => {
     if (!dropDetails.name || !dropDetails.phone) {
       return toast.error("Please enter receiver details.");
     }
-    if (weight <= 0 || weight > 1.0) {
-      return toast.error("Weight must be between 0 and 1 KG.");
+    if (!/^\d{10}$/.test(String(dropDetails.phone).trim())) {
+      return toast.error("Receiver phone must be exactly 10 digits.");
+    }
+    if (weightKg <= 0 || weightKg > maxWeightKg) {
+      return toast.error(
+        `Weight must be between 0 and ${maxWeightKg} KG (or up to ${Math.round(maxWeightKg * 1000)} gm).`,
+      );
+    }
+    if (!packageTypes.some((t) => t.value === packageType)) {
+      return toast.error("Please select a valid package type.");
     }
 
     setLoading(true);
@@ -269,7 +333,7 @@ const ParcelDeliveryPage = () => {
         dropAddress: dropDetails,
         packageDetails: {
           packageType,
-          weight,
+          weight: weightKg,
           description
         },
         paymentMethod
@@ -277,14 +341,15 @@ const ParcelDeliveryPage = () => {
 
       if (response.data && response.data.success) {
         toast.success("Parcel delivery requested successfully!");
-        setTrackingParcel(response.data.result);
-        setActiveTab('history');
+        const createdParcel = response.data.result;
         // Reset form
         setDropDetails({ name: '', phone: '', fullAddress: '', lat: null, lng: null });
         setDescription('');
-        setWeight(0.2);
+        setWeightInput("0.2");
+        setWeightUnit("kg");
         setFareEstimation(null);
         fetchHistory();
+        navigate(`/parcel/search/${createdParcel._id}`);
       } else {
         toast.error(response.data.message || "Failed to create request");
       }
@@ -329,50 +394,85 @@ const ParcelDeliveryPage = () => {
     return () => clearInterval(interval);
   }, [trackingParcel]);
 
+  useEffect(() => {
+    if (!trackingParcel?._id) return undefined;
+    const getToken = getCustomerToken;
+    getOrderSocket(getToken);
+    return onParcelStatusUpdate(getToken, (payload) => {
+      if (!payload?.parcelId || payload.parcelId !== trackingParcel._id) return;
+      if (payload.parcel) {
+        setTrackingParcel(payload.parcel);
+        return;
+      }
+      if (payload.status) {
+        setTrackingParcel((prev) => (prev ? { ...prev, status: payload.status } : prev));
+      }
+    });
+  }, [trackingParcel?._id]);
+
   return (
     <div className="container mx-auto max-w-4xl px-4 py-6 font-outfit mt-4">
       {/* Header section */}
-      <div className="bg-gradient-to-r from-primary to-blue-600 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <button
-            onClick={() => navigate('/')}
-            className="flex items-center gap-1.5 text-white/85 hover:text-white font-bold text-xs mb-4 transition-all hover:-translate-x-1"
-          >
-            <ChevronLeft size={16} /> Back to Home
-          </button>
-          <span className="bg-white/20 text-xs font-extrabold uppercase px-3 py-1.5 rounded-full tracking-widest">
-            Up to 1 KG Only
-          </span>
-          <h1 className="text-3xl md:text-4xl font-black tracking-tight mt-3">
-            Instant Parcel Delivery
-          </h1>
-          <p className="text-white/80 font-medium text-sm md:text-base mt-2 max-w-lg">
-            Send documents, keys, food, or electronics instantly across the city. Smooth, secure, and fully tracked.
-          </p>
+      {!trackingParcel ? (
+        <div className="bg-gradient-to-r from-primary to-blue-600 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-1.5 text-white/85 hover:text-white font-bold text-xs mb-4 transition-all hover:-translate-x-1"
+            >
+              <ChevronLeft size={16} /> Back to Home
+            </button>
+            <span className="bg-white/20 text-xs font-extrabold uppercase px-3 py-1.5 rounded-full tracking-widest">
+              Up to {maxWeightKg} KG Only
+            </span>
+            <h1 className="text-3xl md:text-4xl font-black tracking-tight mt-3">
+              Instant Parcel Delivery
+            </h1>
+            <p className="text-white/80 font-medium text-sm md:text-base mt-2 max-w-lg">
+              Send documents, keys, food, or electronics instantly across the city. Smooth, secure, and fully tracked.
+            </p>
+          </div>
+          <div className="flex gap-2 bg-white/10 p-1.5 rounded-2xl backdrop-blur-sm self-stretch md:self-auto justify-center">
+            <button
+              onClick={() => { setActiveTab('book'); setTrackingParcel(null); }}
+              className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                activeTab === 'book' && !trackingParcel
+                  ? 'bg-white text-primary shadow-md'
+                  : 'hover:bg-white/10 text-white'
+              }`}
+            >
+              <Truck size={16} /> Book
+            </button>
+            <button
+              onClick={() => { setActiveTab('history'); setTrackingParcel(null); fetchHistory(); }}
+              className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                activeTab === 'history' || trackingParcel
+                  ? 'bg-white text-primary shadow-md'
+                  : 'hover:bg-white/10 text-white'
+              }`}
+            >
+              <History size={16} /> History & Status
+            </button>
+          </div>
         </div>
-        <div className="flex gap-2 bg-white/10 p-1.5 rounded-2xl backdrop-blur-sm self-stretch md:self-auto justify-center">
-          <button
-            onClick={() => { setActiveTab('book'); setTrackingParcel(null); }}
-            className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-              activeTab === 'book' && !trackingParcel
-                ? 'bg-white text-primary shadow-md'
-                : 'hover:bg-white/10 text-white'
-            }`}
-          >
-            <Truck size={16} /> Book
-          </button>
-          <button
-            onClick={() => { setActiveTab('history'); setTrackingParcel(null); fetchHistory(); }}
-            className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-              activeTab === 'history' || trackingParcel
-                ? 'bg-white text-primary shadow-md'
-                : 'hover:bg-white/10 text-white'
-            }`}
-          >
-            <History size={16} /> History & Status
-          </button>
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-5 p-2">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => { setActiveTab('book'); setTrackingParcel(null); }}
+              className="px-3 py-2 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 text-slate-600 hover:bg-slate-100"
+            >
+              <Truck size={16} /> Book
+            </button>
+            <button
+              onClick={() => { setActiveTab('history'); setTrackingParcel(null); fetchHistory(); }}
+              className="px-3 py-2 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 bg-slate-900 text-white"
+            >
+              <History size={16} /> History & Status
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Main Content Area */}
       {!trackingParcel && activeTab === 'book' && (
@@ -464,10 +564,16 @@ const ParcelDeliveryPage = () => {
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                     <input
                       type="tel"
+                      inputMode="numeric"
+                      pattern="[0-9]{10}"
+                      maxLength={10}
                       required
-                      placeholder="Phone"
+                      placeholder="10-digit phone"
                       value={dropDetails.phone}
-                      onChange={(e) => setDropDetails(d => ({ ...d, phone: e.target.value }))}
+                      onChange={(e) => {
+                        const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 10);
+                        setDropDetails((d) => ({ ...d, phone: digitsOnly }));
+                      }}
                       className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                     />
                   </div>
@@ -513,28 +619,68 @@ const ParcelDeliveryPage = () => {
                       onChange={(e) => setPackageType(e.target.value)}
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white outline-none focus:border-primary"
                     >
-                      <option value="document">Document / Paper</option>
-                      <option value="food">Food Items</option>
-                      <option value="clothes">Clothes / Fabric</option>
-                      <option value="electronics">Electronics</option>
-                      <option value="other">Other Packets</option>
+                      {packageTypes.map((type) => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-500 uppercase">Weight (Max 1 KG)</label>
-                    <div className="relative">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      Weight (Max {weightUnit === "gm" ? `${Math.round(maxWeightKg * 1000)} gm` : `${maxWeightKg} KG`})
+                    </label>
+                    <div className="flex gap-2">
                       <input
-                        type="number"
-                        step="0.05"
-                        min="0.05"
-                        max="1.0"
+                        type="text"
+                        inputMode="decimal"
                         required
-                        value={weight}
-                        onChange={(e) => setWeight(Math.min(1.0, Math.max(0.01, parseFloat(e.target.value || 0.1))))}
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                        placeholder={weightUnit === "gm" ? "e.g. 500" : "e.g. 1"}
+                        value={weightInput}
+                        onChange={(e) => {
+                          let next = e.target.value;
+                          if (weightUnit === "gm") {
+                            next = next.replace(/\D/g, "").slice(0, 4);
+                          } else {
+                            next = next.replace(/[^\d.]/g, "");
+                            const parts = next.split(".");
+                            if (parts.length > 2) {
+                              next = `${parts[0]}.${parts.slice(1).join("")}`;
+                            }
+                            if (parts[1]?.length > 3) {
+                              next = `${parts[0]}.${parts[1].slice(0, 3)}`;
+                            }
+                          }
+                          setWeightInput(next);
+                        }}
+                        className="flex-1 min-w-0 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">KG</span>
+                      <select
+                        value={weightUnit}
+                        onChange={(e) => {
+                          const nextUnit = e.target.value;
+                          const n = parseFloat(weightInput);
+                          if (Number.isFinite(n) && n > 0) {
+                            if (nextUnit === "gm" && weightUnit === "kg") {
+                              setWeightInput(String(Math.round(n * 1000)));
+                            } else if (nextUnit === "kg" && weightUnit === "gm") {
+                              const kg = n / 1000;
+                              setWeightInput(
+                                Number.isInteger(kg) ? String(kg) : String(Math.round(kg * 1000) / 1000),
+                              );
+                            }
+                          }
+                          setWeightUnit(nextUnit);
+                        }}
+                        className="w-[88px] shrink-0 rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold text-slate-700 outline-none focus:border-primary bg-white"
+                      >
+                        <option value="kg">KG</option>
+                        <option value="gm">GM</option>
+                      </select>
                     </div>
+                    {weightKg > 0 && weightUnit === "gm" && (
+                      <p className="text-[10px] text-slate-400 font-medium">= {weightKg} KG</p>
+                    )}
                   </div>
                 </div>
 
@@ -542,7 +688,7 @@ const ParcelDeliveryPage = () => {
                   <label className="text-xs font-bold text-slate-500 uppercase">Package Description</label>
                   <textarea
                     rows={2}
-                    placeholder="E.g. keys, critical document papers..."
+                    placeholder={packageDescriptionPlaceholder}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
@@ -595,7 +741,7 @@ const ParcelDeliveryPage = () => {
                     </div>
                   ) : (
                     <div className="text-3xl font-black text-white mt-1">
-                      ₹{fareEstimation ? fareEstimation.fare : '0.00'}
+                      ₹{fareEstimation ? Number(fareEstimation.fare).toFixed(2) : '0.00'}
                     </div>
                   )}
                 </div>
@@ -611,15 +757,15 @@ const ParcelDeliveryPage = () => {
                 <div className="border-t border-b border-white/10 py-3 space-y-2 text-xs text-slate-300 font-medium">
                   <div className="flex justify-between">
                     <span>Base Fare</span>
-                    <span>₹{fareEstimation.baseFare}</span>
+                    <span>₹{Number(fareEstimation.baseFare).toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Distance Fare ({fareEstimation.distance} km)</span>
-                    <span>₹{fareEstimation.distanceFare}</span>
+                    <span>₹{Number(fareEstimation.distanceFare).toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Weight Charge ({weight} kg)</span>
-                    <span>₹{fareEstimation.weightFare}</span>
+                    <span>Weight Charge ({weightKg} kg)</span>
+                    <span>₹{Number(fareEstimation.weightFare).toFixed(2)}</span>
                   </div>
                 </div>
               )}
@@ -679,9 +825,10 @@ const ParcelDeliveryPage = () => {
                       <span className={`text-xs font-extrabold px-3 py-1 rounded-full uppercase ${
                         parcel.status === 'DELIVERED' ? 'bg-green-100 text-green-700' :
                         parcel.status === 'CANCELLED' ? 'bg-red-100 text-red-600' :
+                        parcel.status === 'SEARCHING' ? 'bg-amber-100 text-amber-700 animate-pulse' :
                         'bg-blue-100 text-blue-700 animate-pulse'
                       }`}>
-                        {parcel.status}
+                        {formatParcelStatusLabel(parcel.status)}
                       </span>
                     </div>
 
@@ -723,30 +870,43 @@ const ParcelDeliveryPage = () => {
 
       {/* Live tracking details sub-page */}
       {trackingParcel && (
-        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-lg space-y-6">
-          <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+        <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-100 shadow-lg space-y-4 sm:space-y-6">
+          <div className="flex flex-wrap items-start gap-3 border-b border-slate-100 pb-3 sm:pb-4">
             <button
               onClick={() => { setTrackingParcel(null); fetchHistory(); }}
               className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
             >
               <ChevronLeft size={20} className="text-slate-700" />
             </button>
-            <div>
-              <h2 className="text-lg font-black text-slate-800">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base sm:text-lg font-black text-slate-800">
                 Track Delivery Request
               </h2>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+              <p className="text-[11px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5 break-all">
                 ID: {trackingParcel._id}
               </p>
             </div>
-            <span className={`ml-auto text-xs font-black px-3 py-1.5 rounded-full uppercase ${
+            <span className={`text-[11px] sm:text-xs font-black px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full uppercase whitespace-nowrap ${
               trackingParcel.status === 'DELIVERED' ? 'bg-green-100 text-green-700' :
               trackingParcel.status === 'CANCELLED' ? 'bg-red-100 text-red-600' :
+              trackingParcel.status === 'SEARCHING' ? 'bg-amber-100 text-amber-700 animate-pulse' :
               'bg-blue-100 text-blue-700'
             }`}>
-              {trackingParcel.status}
+              {formatParcelStatusLabel(trackingParcel.status)}
             </span>
           </div>
+
+          {(trackingParcel.status === 'SEARCHING' || trackingParcel.status === 'REQUESTED') && (
+            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-3">
+              <Clock className="text-amber-600 shrink-0 mt-0.5" size={18} />
+              <div>
+                <p className="text-sm font-black text-amber-900">Finding a nearby rider</p>
+                <p className="text-xs text-amber-700 font-medium mt-1">
+                  Available parcel delivery partners are being notified. The first rider to accept will be assigned to your booking.
+                </p>
+              </div>
+            </div>
+          )}
 
           <LiveTrackingMap
             pickupAddress={trackingParcel.pickupAddress}
@@ -754,7 +914,7 @@ const ParcelDeliveryPage = () => {
             deliveryPartner={trackingParcel.deliveryPartnerId}
           />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 lg:gap-8">
             {/* Tracking Progress */}
             <div className="space-y-6">
               {/* OTP code warning */}
@@ -775,13 +935,14 @@ const ParcelDeliveryPage = () => {
               )}
 
               {/* Status Flow Display */}
-              <div className="bg-slate-50 rounded-2xl p-5 space-y-4">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">
+              <div className="bg-slate-50 rounded-2xl p-4 sm:p-5 space-y-4">
+                <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wider">
                   Status History
                 </h3>
-                <div className="relative pl-6 space-y-6 border-l-2 border-slate-200">
+                <div className="relative pl-5 sm:pl-6 space-y-5 sm:space-y-6 border-l-2 border-slate-200">
                   {[
                     { key: 'REQUESTED', label: 'Requested', desc: 'Booking requested by customer.' },
+                    { key: 'SEARCHING', label: 'Searching for rider', desc: 'Notifying nearby parcel riders.' },
                     { key: 'ACCEPTED', label: 'Accepted', desc: 'Rider confirmed acceptance.' },
                     { key: 'RIDER_ASSIGNED', label: 'Rider Assigned', desc: 'Rider is on the way.' },
                     { key: 'PICKUP_REACHED', label: 'Rider Reached Pickup', desc: 'Rider reached the pickup point.' },
@@ -791,6 +952,7 @@ const ParcelDeliveryPage = () => {
                   ].map((step, idx) => {
                     const statuses = [
                       'REQUESTED',
+                      'SEARCHING',
                       'ACCEPTED',
                       'RIDER_ASSIGNED',
                       'PICKUP_REACHED',
@@ -805,17 +967,17 @@ const ParcelDeliveryPage = () => {
 
                     return (
                       <div key={step.key} className="relative">
-                        <div className={`absolute -left-[31px] top-0.5 h-4 w-4 rounded-full border-2 bg-white flex items-center justify-center transition-all ${
+                        <div className={`absolute -left-[27px] sm:-left-[31px] top-0.5 h-4 w-4 rounded-full border-2 bg-white flex items-center justify-center transition-all ${
                           isCurrent ? 'border-primary ring-4 ring-primary/20 scale-110' :
                           isDone ? 'border-primary bg-primary' : 'border-slate-300'
                         }`}>
                           {isDone && !isCurrent && <div className="h-1.5 w-1.5 bg-white rounded-full" />}
                         </div>
                         <div>
-                          <h4 className={`text-xs font-bold ${isCurrent ? 'text-primary' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
+                          <h4 className={`text-[11px] sm:text-xs font-bold ${isCurrent ? 'text-primary' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
                             {step.label}
                           </h4>
-                          <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                          <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-4">
                             {step.desc}
                           </p>
                         </div>
@@ -828,8 +990,8 @@ const ParcelDeliveryPage = () => {
 
             {/* Address & Package Info Card */}
             <div className="space-y-6">
-              <div className="bg-slate-50 rounded-2xl p-5 space-y-4">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">
+              <div className="bg-slate-50 rounded-2xl p-4 sm:p-5 space-y-4">
+                <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wider">
                   Parcel Overview
                 </h3>
 

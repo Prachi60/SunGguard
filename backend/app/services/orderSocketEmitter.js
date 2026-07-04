@@ -4,9 +4,12 @@
 
 import mongoose from "mongoose";
 import Notification from "../models/notification.js";
+import Delivery from "../models/delivery.js";
 import { 
   getDeliveryPartnerIdsWithinSellerRadius,
-  getDeliveryPartnerIdsWithinCustomerRadius
+  getDeliveryPartnerIdsWithinCustomerRadius,
+  getParcelRiderIdsNearPickup,
+  getAllEligibleParcelRiderIds,
 } from "./deliveryNearbyService.js";
 import { emitNotificationEvent } from "../modules/notifications/notification.emitter.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
@@ -312,5 +315,147 @@ export async function emitReturnBroadcastForCustomer(customerLocation, payload) 
     );
   } catch (err) {
     console.warn("[emitReturnBroadcastForCustomer] DB error", err.message);
+  }
+}
+
+/**
+ * Broadcast a parcel pickup offer to every eligible parcel/both rider
+ * inside the configured search radius (first accept wins).
+ */
+export async function emitParcelBroadcast(lat, lng, radiusKm, payload) {
+  const s = getIo();
+  // Parcel-only + "both" riders (isParcelService: true), online, verified, free.
+  let ids = await getParcelRiderIdsNearPickup(lat, lng, radiusKm);
+  let usedFallback = false;
+
+  // If nobody has a usable GPS fix inside radius, still notify all eligible
+  // parcel/both riders so the request is not silently dropped.
+  if (!ids.length) {
+    ids = await getAllEligibleParcelRiderIds();
+    usedFallback = ids.length > 0;
+  }
+
+  if (!ids.length) {
+    if (s) {
+      s.to("delivery:online").emit("parcel:broadcast", {
+        ...payload,
+        at: new Date().toISOString(),
+        _fallbackBroadcast: true,
+      });
+    }
+    return { ids: [] };
+  }
+
+  // De-dupe in case of any overlap.
+  ids = [...new Set(ids.map((id) => String(id)))];
+
+  const body = {
+    ...payload,
+    at: new Date().toISOString(),
+    _fallbackBroadcast: usedFallback || undefined,
+  };
+
+  if (s) {
+    for (const id of ids) {
+      s.to(`delivery:${id}`).emit("parcel:broadcast", body);
+    }
+  }
+
+  if (!payload.retryAttempt) {
+    emitNotificationEvent(NOTIFICATION_EVENTS.NEW_PARCEL_BROADCAST, {
+      parcelId: payload.parcelId,
+      deliveryIds: ids,
+    });
+
+    try {
+      await Notification.insertMany(
+        ids.map((id) => ({
+          recipient: new mongoose.Types.ObjectId(id),
+          recipientModel: "Delivery",
+          title: "New parcel delivery",
+          message: `Parcel #${String(payload.parcelId || "").slice(-6)} nearby — tap Accept on the alert.`,
+          type: "parcel",
+          data: {
+            parcelId: payload.parcelId,
+            preview: payload.preview || null,
+            searchExpiresAt: payload.searchExpiresAt || null,
+          },
+        })),
+        { ordered: false },
+      );
+    } catch (e) {
+      console.warn("[emitParcelBroadcast] notifications", e.message);
+    }
+  }
+
+  return { ids };
+}
+
+/**
+ * Retract a parcel offer from losing riders after first-wins accept.
+ */
+export async function retractParcelBroadcast(parcelId, winnerDeliveryId) {
+  const s = getIo();
+  const winnerId = normalizeDeliveryId(winnerDeliveryId);
+  const winnerObjectId =
+    winnerId && mongoose.Types.ObjectId.isValid(winnerId)
+      ? new mongoose.Types.ObjectId(winnerId)
+      : null;
+
+  try {
+    const query = {
+      recipientModel: "Delivery",
+      type: "parcel",
+      "data.parcelId": String(parcelId),
+    };
+
+    if (winnerObjectId) {
+      query.recipient = { $ne: winnerObjectId };
+    }
+
+    const notifications = await Notification.find(query)
+      .select("_id recipient")
+      .lean();
+
+    if (!notifications.length) {
+      if (s) {
+        s.to("delivery:online").emit("parcel:broadcast:withdrawn", {
+          parcelId: String(parcelId),
+          winnerDeliveryId: winnerId,
+          at: new Date().toISOString(),
+        });
+      }
+      return { removedCount: 0 };
+    }
+
+    const recipientIds = [
+      ...new Set(
+        notifications
+          .map((n) => n.recipient?.toString?.() || String(n.recipient || ""))
+          .filter(Boolean),
+      ),
+    ];
+
+    if (s) {
+      for (const recipientId of recipientIds) {
+        s.to(`delivery:${recipientId}`).emit("parcel:broadcast:withdrawn", {
+          parcelId: String(parcelId),
+          winnerDeliveryId: winnerId,
+          at: new Date().toISOString(),
+        });
+      }
+    }
+
+    await Notification.deleteMany({
+      recipientModel: "Delivery",
+      type: "parcel",
+      "data.parcelId": String(parcelId),
+      ...(winnerObjectId ? { recipient: { $ne: winnerObjectId } } : {}),
+    });
+
+    return { removedCount: notifications.length };
+  } catch (error) {
+    console.warn("[retractParcelBroadcast] failed", parcelId, error.message);
+    return { removedCount: 0 };
   }
 }

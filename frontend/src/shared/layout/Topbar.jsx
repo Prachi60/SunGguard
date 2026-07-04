@@ -144,6 +144,30 @@ const Topbar = ({ onMenuClick }) => {
         }
     };
 
+    const handleNotificationClick = (notif) => {
+        const link = notif?.data?.link;
+        const parcelId = notif?.data?.parcelId;
+        const eventType = notif?.type || notif?.data?.eventType;
+
+        setShowNotifications(false);
+
+        if (link && typeof link === "string") {
+            try {
+                const url = new URL(link, window.location.origin);
+                if (url.origin === window.location.origin) {
+                    navigate(`${url.pathname}${url.search}${url.hash}`);
+                    return;
+                }
+            } catch {
+                /* fall through */
+            }
+        }
+
+        if (isAdmin && (eventType === "PARCEL_REQUESTED" || parcelId)) {
+            navigate(parcelId ? `/admin/parcels?parcelId=${parcelId}` : "/admin/parcels");
+        }
+    };
+
     const handleMarkAllAsRead = async () => {
         try {
             if (isSeller) await sellerApi.markAllNotificationsRead();
@@ -221,6 +245,7 @@ const Topbar = ({ onMenuClick }) => {
                                 notifications={notifications}
                                 onMarkAsRead={handleMarkAsRead}
                                 onMarkAllAsRead={handleMarkAllAsRead}
+                                onNotificationClick={handleNotificationClick}
                                 onClose={() => setShowNotifications(false)}
                             />
                         )}

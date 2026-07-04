@@ -104,7 +104,7 @@ const filteredRiders = useMemo(() => {
     });
 }, [riders, searchTerm, statusFilter]);
 
-const handleAction = (type, rider) => {
+const handleAction = async (type, rider) => {
     if (type === 'view') {
         setViewingRider(rider);
     } else if (type === 'edit') {
@@ -112,8 +112,22 @@ const handleAction = (type, rider) => {
         setSelectedRider(rider);
         setIsEditModalOpen(true);
     } else if (type === 'delete') {
-        if (window.confirm(`Are you sure you want to deactivate ${rider.name}?`)) {
-            setRiders(riders.filter(r => r.id !== rider.id));
+        if (!window.confirm(`Delete ${rider.name} permanently? This cannot be undone.`)) {
+            return;
+        }
+        try {
+            const response = await adminApi.rejectDeliveryPartner(rider.id);
+            if (response.data?.success) {
+                setRiders((prev) => prev.filter((r) => r.id !== rider.id));
+                setTotal((prev) => Math.max(0, prev - 1));
+                if (viewingRider?.id === rider.id) setViewingRider(null);
+                toast.success('Delivery partner deleted');
+            } else {
+                toast.error(response.data?.message || 'Failed to delete delivery partner');
+            }
+        } catch (error) {
+            console.error('Delete rider error:', error);
+            toast.error(error.response?.data?.message || 'Failed to delete delivery partner');
         }
     }
 };
@@ -454,9 +468,12 @@ return (
                                 <button className="flex-1 py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-all">
                                     Send Message
                                 </button>
-                                <button className="px-6 py-4 bg-rose-50 text-rose-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-rose-100 transition-all active:scale-95">
-                                    DEACTIVATE
-                                </button>
+                                        <button
+                                            onClick={() => handleAction('delete', viewingRider)}
+                                            className="px-6 py-4 bg-rose-50 text-rose-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-rose-100 transition-all active:scale-95"
+                                        >
+                                            DELETE
+                                        </button>
                             </div>
                         </div>
                     </motion.div>

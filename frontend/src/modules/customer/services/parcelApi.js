@@ -1,11 +1,15 @@
 import axiosInstance from "@core/api/axios";
+import { getWithDedupe } from "@core/api/dedupe";
 
 export const parcelApi = {
   // Customer APIs
   calculateFare: (data) => axiosInstance.post("/parcel/calculate-fare", data),
   createParcel: (data) => axiosInstance.post("/parcel/create", data),
+  getBookingConfig: () =>
+    getWithDedupe("/parcel/booking-config", {}, { ttl: 15000 }),
   getHistory: () => axiosInstance.get("/parcel/history"),
   trackParcel: (id) => axiosInstance.get(`/parcel/track/${id}`),
+  cancelSearch: (parcelId) => axiosInstance.post(`/parcel/cancel/${parcelId}`),
 
   // Admin APIs
   adminGetParcels: () => axiosInstance.get("/parcel/admin/all"),
@@ -17,7 +21,23 @@ export const parcelApi = {
   adminGetRiders: () => axiosInstance.get("/parcel/admin/riders"),
 
   // Rider/Delivery Partner APIs
-  riderGetAssigned: () => axiosInstance.get("/parcel/rider/assigned"),
+  riderGetAssigned: (options = {}) =>
+    getWithDedupe("/parcel/rider/assigned", {}, {
+      ttl: options.ttl ?? 12000,
+      forceRefresh: options.forceRefresh ?? false,
+    }),
+  riderGetAvailable: (options = {}) =>
+    getWithDedupe("/parcel/rider/available", {}, {
+      ttl: options.ttl ?? 8000,
+      forceRefresh: options.forceRefresh ?? false,
+    }),
+  riderAcceptParcel: (parcelId, idempotencyKey) =>
+    axiosInstance.post(
+      `/parcel/rider/accept/${parcelId}`,
+      {},
+      idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : undefined,
+    ),
+  riderRejectParcel: (parcelId) => axiosInstance.post(`/parcel/rider/reject/${parcelId}`),
   riderUpdateStatus: (data) => axiosInstance.put("/parcel/rider/status", data),
   riderCompleteDelivery: (data) => axiosInstance.put("/parcel/rider/complete", data),
   riderGetEarnings: () => axiosInstance.get("/parcel/rider/earnings"),

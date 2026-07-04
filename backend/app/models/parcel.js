@@ -27,12 +27,12 @@ const packageDetailsSchema = new mongoose.Schema({
   packageType: {
     type: String,
     required: true,
-    enum: ["document", "food", "clothes", "electronics", "other"],
+    trim: true,
   },
   weight: {
     type: Number,
     required: true,
-    max: 1.0, // max 1 KG
+    max: 50,
   },
   description: {
     type: String,
@@ -63,7 +63,7 @@ const parcelSchema = new mongoose.Schema(
     weight: {
       type: Number,
       required: true,
-      max: 1.0,
+      max: 50,
     },
     distance: {
       type: Number,
@@ -72,6 +72,12 @@ const parcelSchema = new mongoose.Schema(
     fare: {
       type: Number,
       required: true,
+    },
+    /** Snapshot used for rider payout (base + distance only; weight excluded). */
+    fareBreakdown: {
+      baseFare: { type: Number, default: 0 },
+      distanceFare: { type: Number, default: 0 },
+      weightFare: { type: Number, default: 0 },
     },
     paymentStatus: {
       type: String,
@@ -90,6 +96,24 @@ const parcelSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    searchExpiresAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    searchMeta: {
+      radiusKm: { type: Number, default: 5 },
+      attempt: { type: Number, default: 1 },
+      lastBroadcastAt: { type: Date, default: null },
+    },
+    skippedBy: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Delivery",
+    }],
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
     otp: {
       type: String,
       required: true,
@@ -98,6 +122,7 @@ const parcelSchema = new mongoose.Schema(
       type: String,
       enum: [
         "REQUESTED",
+        "SEARCHING",
         "ACCEPTED",
         "RIDER_ASSIGNED",
         "PICKUP_REACHED",

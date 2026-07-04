@@ -61,6 +61,16 @@ const deliverySchema = new mongoose.Schema(
             trim: true,
         },
 
+        aadharNumber: {
+            type: String,
+            trim: true,
+        },
+
+        panNumber: {
+            type: String,
+            trim: true,
+        },
+
         currentArea: {
             type: String,
             trim: true,
@@ -91,7 +101,17 @@ const deliverySchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+
+        /** True while rider has an in-progress delivery / return / parcel job. */
+        isBusy: {
+            type: Boolean,
+            default: false,
+        },
         isParcelService: {
+            type: Boolean,
+            default: true,
+        },
+        isQuickCommerceService: {
             type: Boolean,
             default: true,
         },

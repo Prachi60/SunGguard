@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import axiosInstance from '@core/api/axios';
 import { getWithDedupe } from '@core/api/dedupe';
 import { getStoredAuthToken } from '@core/utils/authStorage';
@@ -214,7 +214,7 @@ export const AuthProvider = ({ children }) => {
         else window.location.href = '/login';
     };
 
-    const refreshUser = async () => {
+    const refreshUser = useCallback(async () => {
         if (token) {
             try {
                 const endpoint = `/${currentRole}/profile`;
@@ -225,7 +225,7 @@ export const AuthProvider = ({ children }) => {
                 console.error('Failed to refresh profile:', error);
             }
         }
-    };
+    }, [token, currentRole]);
 
     const value = useMemo(() => ({
         user,
@@ -238,7 +238,7 @@ export const AuthProvider = ({ children }) => {
         logout,
         refreshUser
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }), [user, token, currentRole, isAuthenticated, isLoading, authData]);
+    }), [user, token, currentRole, isAuthenticated, isLoading, authData, refreshUser]);
 
     return (
         <AuthContext.Provider value={value}>

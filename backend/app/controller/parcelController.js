@@ -2,12 +2,58 @@ import Parcel from "../models/parcel.js";
 import ParcelConfig from "../models/parcelConfig.js";
 import Delivery from "../models/delivery.js";
 import User from "../models/customer.js";
+import Admin from "../models/admin.js";
 import { distanceMeters } from "../utils/geoUtils.js";
 import handleResponse from "../utils/helper.js";
 import Notification from "../models/notification.js";
 import { emitNotificationEvent } from "../modules/notifications/notification.emitter.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
-import { emitToAdmins, emitToDelivery } from "../services/orderSocketEmitter.js";
+import { emitToAdmins, emitToDelivery, emitToCustomer, retractParcelBroadcast } from "../services/orderSocketEmitter.js";
+import {
+  startParcelBroadcast,
+  parcelAcceptAtomic,
+  parcelRejectAtomic,
+  fetchAvailableParcelsForRider,
+  cancelParcelSearch,
+  computeRiderParcelEarnings,
+} from "../services/parcelWorkflowService.js";
+import { resetAllParcelData } from "../services/parcelDataResetService.js";
+import { sendSmsIndiaHubOtp } from "../services/smsIndiaHubService.js";
+import { useRealSMS, generateParcelOtp } from "../utils/otp.js";
+
+/**
+ * Send delivery verification OTP to the dropoff receiver phone.
+ * Uses real SMS when configured; otherwise logs mock OTP for local testing.
+ */
+async function dispatchParcelDeliveryOtpToReceiver(parcel) {
+  const digits = String(parcel?.dropAddress?.phone || "").replace(/\D/g, "");
+  const otp = String(parcel?.otp || "").trim();
+  if (!otp || digits.length < 10) {
+    console.warn("[parcel] skip receiver OTP — missing phone or otp", {
+      parcelId: parcel?._id,
+      phoneLen: digits.length,
+    });
+    return { sent: false };
+  }
+
+  const phone = digits.slice(-10);
+  const receiverName = parcel?.dropAddress?.name || "Customer";
+  const message =
+    `Hi ${receiverName}, your SunGguard parcel delivery OTP is ${otp}. ` +
+    `Share this OTP only with the delivery captain to receive your parcel.`;
+
+  try {
+    if (useRealSMS()) {
+      await sendSmsIndiaHubOtp({ phone, otp, message });
+    } else {
+      console.log(`[ParcelDeliveryOTP][mock] receiver ${phone} -> ${otp}`);
+    }
+    return { sent: true, phone };
+  } catch (error) {
+    console.error("[parcel] receiver OTP SMS failed:", error?.message || error);
+    return { sent: false, error: error?.message };
+  }
+}
 
 // Utility to send notifications
 async function sendParcelNotification(userId, role, title, body, eventType = "alert", parcelId = null) {
@@ -55,9 +101,15 @@ export const calculateFare = async (req, res) => {
       return handleResponse(res, 400, "Pickup and drop locations are required");
     }
 
+    const config = await ParcelConfig.getOrCreate();
+    const maxWeightKg = Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 5));
     const pkgWeight = Number(weight || 0.1);
-    if (pkgWeight <= 0 || pkgWeight > 1.0) {
-      return handleResponse(res, 400, "Weight must be greater than 0 and maximum 1 KG");
+    if (pkgWeight <= 0 || pkgWeight > maxWeightKg) {
+      return handleResponse(
+        res,
+        400,
+        `Weight must be greater than 0 and maximum ${maxWeightKg} KG`,
+      );
     }
 
     const distanceM = distanceMeters(
@@ -67,16 +119,16 @@ export const calculateFare = async (req, res) => {
       Number(dropLng)
     );
     const distanceKm = Math.round((distanceM / 1000 + Number.EPSILON) * 100) / 100;
+    const baseFare = Math.round((Number(config.baseFare) || 0) * 100) / 100;
+    const perKmCharge = Number(config.perKmCharge) || 0;
+    const weightCharge = Number(config.weightCharge) || 0;
 
-    const config = await ParcelConfig.getOrCreate();
-    const baseFare = config.baseFare;
-    const perKmCharge = config.perKmCharge;
-    const weightCharge = config.weightCharge;
-
-    const distanceFare = distanceKm * perKmCharge;
-    const weightFare = pkgWeight * weightCharge;
-    const totalFare = baseFare + distanceFare + weightFare;
-    const fare = Math.round((totalFare + Number.EPSILON) * 100) / 100;
+    const distanceFare =
+      Math.round((distanceKm * perKmCharge + Number.EPSILON) * 100) / 100;
+    const weightFare =
+      Math.round((pkgWeight * weightCharge + Number.EPSILON) * 100) / 100;
+    const fare =
+      Math.round((baseFare + distanceFare + weightFare + Number.EPSILON) * 100) / 100;
 
     return handleResponse(res, 200, "Fare calculated successfully", {
       distance: distanceKm,
@@ -103,9 +155,23 @@ export const createParcel = async (req, res) => {
       return handleResponse(res, 400, "Missing required details");
     }
 
+    const config = await ParcelConfig.getOrCreate();
+    const maxWeightKg = Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 5));
     const weight = Number(packageDetails.weight || 0);
-    if (weight <= 0 || weight > 1.0) {
-      return handleResponse(res, 400, "Weight must be greater than 0 and maximum 1 KG");
+    if (weight <= 0 || weight > maxWeightKg) {
+      return handleResponse(
+        res,
+        400,
+        `Weight must be greater than 0 and maximum ${maxWeightKg} KG`,
+      );
+    }
+
+    const allowedTypes = (config.packageTypes || [])
+      .filter((t) => t?.isActive !== false)
+      .map((t) => String(t.value));
+    const packageType = String(packageDetails.packageType || "").trim();
+    if (!packageType || (allowedTypes.length && !allowedTypes.includes(packageType))) {
+      return handleResponse(res, 400, "Invalid package type");
     }
 
     const distanceM = distanceMeters(
@@ -115,15 +181,16 @@ export const createParcel = async (req, res) => {
       Number(dropAddress.lng)
     );
     const distanceKm = Math.round((distanceM / 1000 + Number.EPSILON) * 100) / 100;
-
-    const config = await ParcelConfig.getOrCreate();
-    const distanceFare = distanceKm * config.perKmCharge;
-    const weightFare = weight * config.weightCharge;
-    const totalFare = config.baseFare + distanceFare + weightFare;
-    const fare = Math.round((totalFare + Number.EPSILON) * 100) / 100;
+    const baseFare = Math.round((Number(config.baseFare) || 0) * 100) / 100;
+    const distanceFare =
+      Math.round((distanceKm * (Number(config.perKmCharge) || 0) + Number.EPSILON) * 100) / 100;
+    const weightFare =
+      Math.round((weight * (Number(config.weightCharge) || 0) + Number.EPSILON) * 100) / 100;
+    const fare =
+      Math.round((baseFare + distanceFare + weightFare + Number.EPSILON) * 100) / 100;
 
     // Generate 6-digit OTP code
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = generateParcelOtp();
 
     const parcel = await Parcel.create({
       customerId: req.user.id,
@@ -133,26 +200,48 @@ export const createParcel = async (req, res) => {
       weight,
       distance: distanceKm,
       fare,
+      fareBreakdown: {
+        baseFare,
+        distanceFare,
+        weightFare,
+      },
       paymentStatus: paymentMethod === "COD" ? "PENDING" : "PAID", // Card/UPI/Wallet paid immediately
       paymentMethod,
       otp,
       status: "REQUESTED",
     });
 
-    // Notify admins via socket
+    // Notify admins via socket (live modal on admin dashboard)
     emitToAdmins("parcel:new", parcel);
 
-    // Send notifications
-    await sendParcelNotification(
-      req.user.id,
-      "customer",
-      "Parcel Request Created",
-      `Your parcel delivery request (ID: ${parcel._id}) has been created successfully. Fare: ₹${fare}`,
-      NOTIFICATION_EVENTS.PARCEL_REQUESTED,
-      parcel._id
-    );
+    // Broadcast to nearby parcel riders (first accept wins)
+    const searchingParcel = await startParcelBroadcast(parcel);
+    const resultParcel = searchingParcel || parcel;
 
-    return handleResponse(res, 201, "Parcel request created successfully", parcel);
+    // In-app + push: customer confirmation and admin inbox (so admin can open request)
+    try {
+      const admins = await Admin.find().select("_id").lean();
+      const adminIds = (admins || []).map((a) => a?._id).filter(Boolean);
+      emitNotificationEvent(NOTIFICATION_EVENTS.PARCEL_REQUESTED, {
+        userId: req.user.id,
+        customerId: req.user.id,
+        adminIds,
+        parcelId: parcel._id,
+        fare: parcel.fare,
+        customerBody: `Your parcel delivery request (ID: ${parcel._id}) has been created. Searching for a nearby rider...`,
+        adminBody: `Parcel #${String(parcel._id).slice(-6)} booked for ₹${parcel.fare}. Open Parcel Delivery to view.`,
+        data: {
+          parcelId: parcel._id,
+          fare: parcel.fare,
+          pickup: parcel.pickupAddress?.fullAddress,
+          drop: parcel.dropAddress?.fullAddress,
+        },
+      });
+    } catch (notifyErr) {
+      console.error("Failed to notify customer/admins for parcel request:", notifyErr);
+    }
+
+    return handleResponse(res, 201, "Parcel request created successfully", resultParcel);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -181,6 +270,56 @@ export const trackParcel = async (req, res) => {
     }
 
     return handleResponse(res, 200, "Parcel details retrieved successfully", parcel);
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
+export const cancelParcelByCustomer = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    if (!parcelId) {
+      return handleResponse(res, 400, "Parcel ID is required");
+    }
+
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+
+    if (String(parcel.customerId) !== String(req.user.id)) {
+      return handleResponse(res, 403, "You are not authorized for this parcel");
+    }
+
+    if (!["REQUESTED", "SEARCHING"].includes(parcel.status)) {
+      return handleResponse(
+        res,
+        409,
+        "Parcel search can only be cancelled while searching for rider",
+      );
+    }
+
+    if (parcel.status === "SEARCHING") {
+      cancelParcelSearch(parcel._id);
+      await retractParcelBroadcast(String(parcel._id), null);
+    }
+
+    parcel.status = "CANCELLED";
+    parcel.searchExpiresAt = null;
+    parcel.searchMeta = undefined;
+    await parcel.save();
+
+    emitToAdmins("parcel:status:update", parcel);
+    emitToCustomer(parcel.customerId, {
+      event: "parcel:status:update",
+      payload: {
+        parcelId: String(parcel._id),
+        status: parcel.status,
+        parcel,
+      },
+    });
+
+    return handleResponse(res, 200, "Parcel search cancelled successfully", parcel);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -216,6 +355,15 @@ export const adminAssignRider = async (req, res) => {
       return handleResponse(res, 404, "Parcel not found");
     }
 
+    if (parcel.deliveryPartnerId) {
+      return handleResponse(res, 409, "Parcel already has a rider assigned");
+    }
+
+    if (parcel.status === "SEARCHING") {
+      cancelParcelSearch(parcelId);
+      await retractParcelBroadcast(String(parcelId), null);
+    }
+
     const rider = await Delivery.findById(riderId);
     if (!rider) {
       return handleResponse(res, 404, "Delivery partner not found");
@@ -223,6 +371,9 @@ export const adminAssignRider = async (req, res) => {
 
     parcel.deliveryPartnerId = riderId;
     parcel.status = "ACCEPTED";
+    parcel.acceptedAt = new Date();
+    parcel.searchExpiresAt = null;
+    parcel.searchMeta = undefined;
     await parcel.save();
 
     rider.isBusy = true;
@@ -232,6 +383,8 @@ export const adminAssignRider = async (req, res) => {
       event: "parcel:assigned",
       payload: parcel
     });
+
+    emitToAdmins("parcel:status:update", parcel);
 
     // Notify Customer
     await sendParcelNotification(
@@ -253,6 +406,15 @@ export const adminAssignRider = async (req, res) => {
       parcel._id
     );
 
+    emitToCustomer(parcel.customerId, {
+      event: "parcel:status:update",
+      payload: {
+        parcelId: String(parcel._id),
+        status: "ACCEPTED",
+        parcel,
+      },
+    });
+
     return handleResponse(res, 200, "Delivery partner assigned successfully", parcel);
   } catch (error) {
     return handleResponse(res, 500, error.message);
@@ -268,14 +430,83 @@ export const adminGetPricingConfig = async (req, res) => {
   }
 };
 
+/** Public booking options for customer Package Details form. */
+export const getBookingConfig = async (req, res) => {
+  try {
+    const config = await ParcelConfig.getPublicBookingConfig();
+    return handleResponse(res, 200, "Parcel booking config retrieved", config);
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
 export const adminUpdatePricingConfig = async (req, res) => {
   try {
-    const { baseFare, perKmCharge, weightCharge } = req.body;
+    const {
+      baseFare,
+      perKmCharge,
+      weightCharge,
+      baseSearchRadiusKm,
+      radiusMultiplier,
+      riderSharePercent,
+      riderBaseFareSharePercent,
+      riderDistanceFareSharePercent,
+      packageTypes,
+      maxWeightKg,
+      packageDescriptionPlaceholder,
+    } = req.body;
 
     const config = await ParcelConfig.getOrCreate();
-    if (baseFare !== undefined) config.baseFare = baseFare;
-    if (perKmCharge !== undefined) config.perKmCharge = perKmCharge;
-    if (weightCharge !== undefined) config.weightCharge = weightCharge;
+    if (baseFare !== undefined) config.baseFare = Number(baseFare);
+    if (perKmCharge !== undefined) config.perKmCharge = Number(perKmCharge);
+    if (weightCharge !== undefined) config.weightCharge = Number(weightCharge);
+    if (baseSearchRadiusKm !== undefined) {
+      config.baseSearchRadiusKm = Math.min(100, Math.max(1, Number(baseSearchRadiusKm)));
+    }
+    if (radiusMultiplier !== undefined) {
+      config.radiusMultiplier = Math.min(5, Math.max(1, Number(radiusMultiplier)));
+    }
+    if (riderBaseFareSharePercent !== undefined) {
+      config.riderBaseFareSharePercent = Math.min(
+        100,
+        Math.max(0, Number(riderBaseFareSharePercent)),
+      );
+    }
+    if (riderDistanceFareSharePercent !== undefined) {
+      config.riderDistanceFareSharePercent = Math.min(
+        100,
+        Math.max(0, Number(riderDistanceFareSharePercent)),
+      );
+    }
+    // Keep legacy field in sync as average for older readers.
+    if (
+      riderBaseFareSharePercent !== undefined ||
+      riderDistanceFareSharePercent !== undefined
+    ) {
+      const basePct = Number(
+        config.riderBaseFareSharePercent ?? config.riderSharePercent ?? 80,
+      );
+      const distPct = Number(
+        config.riderDistanceFareSharePercent ?? config.riderSharePercent ?? 80,
+      );
+      config.riderSharePercent = Math.round((basePct + distPct) / 2);
+    } else if (riderSharePercent !== undefined) {
+      const pct = Math.min(100, Math.max(0, Number(riderSharePercent)));
+      config.riderSharePercent = pct;
+      config.riderBaseFareSharePercent = pct;
+      config.riderDistanceFareSharePercent = pct;
+    }
+    if (packageTypes !== undefined) {
+      config.packageTypes = ParcelConfig.normalizePackageTypes(packageTypes);
+    }
+    if (maxWeightKg !== undefined) {
+      config.maxWeightKg = Math.min(50, Math.max(0.1, Number(maxWeightKg) || 5));
+    }
+    if (packageDescriptionPlaceholder !== undefined) {
+      config.packageDescriptionPlaceholder = String(
+        packageDescriptionPlaceholder || "",
+      ).trim() || "E.g. keys, critical document papers...";
+    }
 
     await config.save();
     return handleResponse(res, 200, "Pricing config updated successfully", config);
@@ -297,11 +528,30 @@ export const adminGetReports = async (req, res) => {
       .filter(p => p.status === "DELIVERED")
       .reduce((sum, p) => sum + p.fare, 0);
 
+    const settings = await ParcelConfig.getSearchSettings();
+    const delivered = parcels.filter((p) => p.status === "DELIVERED");
+    const riderPayout = Math.round(
+      (delivered.reduce(
+        (sum, p) => sum + computeRiderParcelEarnings(p, settings),
+        0,
+      ) +
+        Number.EPSILON) *
+        100,
+    ) / 100;
+    const adminCommission = Math.round(
+      (revenue - riderPayout + Number.EPSILON) * 100,
+    ) / 100;
+
     return handleResponse(res, 200, "Reports retrieved successfully", {
       totalDeliveries,
       completed,
       cancelled,
       revenue,
+      riderSharePercent: settings.riderSharePercent,
+      riderBaseFareSharePercent: settings.riderBaseFareSharePercent,
+      riderDistanceFareSharePercent: settings.riderDistanceFareSharePercent,
+      riderPayout,
+      adminCommission,
     });
   } catch (error) {
     return handleResponse(res, 500, error.message);
@@ -311,12 +561,30 @@ export const adminGetReports = async (req, res) => {
 export const adminGetActiveDeliveries = async (req, res) => {
   try {
     const activeParcels = await Parcel.find({
-      status: { $in: ["ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"] }
+      status: { $in: ["SEARCHING", "REQUESTED", "ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"] }
     })
       .populate("customerId", "name phone")
       .populate("deliveryPartnerId", "name phone");
 
     return handleResponse(res, 200, "Active deliveries retrieved successfully", activeParcels);
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
+export const adminResetAllParcelData = async (req, res) => {
+  try {
+    const confirm = String(req.body?.confirm || "").trim();
+    if (confirm !== "RESET_PARCEL") {
+      return handleResponse(
+        res,
+        400,
+        'Send { "confirm": "RESET_PARCEL" } to wipe all parcel data.',
+      );
+    }
+
+    const summary = await resetAllParcelData();
+    return handleResponse(res, 200, "All parcel data cleared successfully", summary);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -386,7 +654,33 @@ export const riderUpdateStatus = async (req, res) => {
       parcel.pickupProofImage = pickupProofImage;
     }
 
+    // Fresh OTP at delivery time — sent to dropoff receiver phone.
+    // Uses 123456 until USE_REAL_SMS=true.
+    let receiverOtpDispatch = null;
+    if (status === "OUT_FOR_DELIVERY") {
+      parcel.otp = generateParcelOtp();
+    }
+
     await parcel.save();
+
+    if (status === "OUT_FOR_DELIVERY") {
+      receiverOtpDispatch = await dispatchParcelDeliveryOtpToReceiver(parcel);
+    }
+
+    const populated = await Parcel.findById(parcel._id)
+      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location");
+
+    emitToAdmins("parcel:status:update", populated || parcel);
+    emitToCustomer(parcel.customerId, {
+      event: "parcel:status:update",
+      payload: {
+        parcelId: String(parcel._id),
+        status,
+        parcel: populated || parcel,
+        otp: status === "OUT_FOR_DELIVERY" ? parcel.otp : undefined,
+        otpSentToReceiver: receiverOtpDispatch?.sent === true,
+      },
+    });
 
     if (status === "CANCELLED") {
       const rider = await Delivery.findById(req.user.id);
@@ -402,19 +696,29 @@ export const riderUpdateStatus = async (req, res) => {
     else if (status === "RIDER_ASSIGNED") msg = "Rider is on the way to pick up your parcel.";
     else if (status === "PICKUP_REACHED") msg = "Rider has reached your pickup location.";
     else if (status === "PICKED_UP") msg = "Rider has picked up your parcel.";
-    else if (status === "OUT_FOR_DELIVERY") msg = "Your parcel is out for delivery.";
+    else if (status === "OUT_FOR_DELIVERY") {
+      msg = receiverOtpDispatch?.sent
+        ? `Your parcel is out for delivery. Delivery OTP ${parcel.otp} has been sent to receiver ${parcel.dropAddress?.phone}.`
+        : `Your parcel is out for delivery. Delivery OTP is ${parcel.otp}. Share it with the receiver if needed.`;
+    }
     else if (status === "CANCELLED") msg = "Your parcel delivery was cancelled by the rider.";
 
     await sendParcelNotification(
       parcel.customerId,
       "customer",
-      `Parcel status: ${status}`,
+      status === "OUT_FOR_DELIVERY" ? "Parcel OTP sent to receiver" : `Parcel status: ${status}`,
       msg,
       NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE,
       parcel._id
     );
 
-    return handleResponse(res, 200, "Parcel status updated successfully", parcel);
+    const resultDoc = populated || parcel;
+    const resultPayload = resultDoc.toObject ? resultDoc.toObject() : { ...resultDoc };
+    if (status === "OUT_FOR_DELIVERY") {
+      resultPayload.otpSentToReceiver = receiverOtpDispatch?.sent === true;
+    }
+
+    return handleResponse(res, 200, "Parcel status updated successfully", resultPayload);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -449,6 +753,19 @@ export const riderCompleteDelivery = async (req, res) => {
 
     await parcel.save();
 
+    const populated = await Parcel.findById(parcel._id)
+      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location");
+
+    emitToAdmins("parcel:status:update", populated || parcel);
+    emitToCustomer(parcel.customerId, {
+      event: "parcel:status:update",
+      payload: {
+        parcelId: String(parcel._id),
+        status: "DELIVERED",
+        parcel: populated || parcel,
+      },
+    });
+
     const rider = await Delivery.findById(req.user.id);
     if (rider) {
       rider.isBusy = false;
@@ -477,18 +794,84 @@ export const riderGetEarnings = async (req, res) => {
       deliveryPartnerId: req.user.id,
       status: "DELIVERED"
     });
+    const settings = await ParcelConfig.getSearchSettings();
 
     const totalDeliveries = completedParcels.length;
-    // Rider receives 80% of fare as earnings
-    const totalEarnings = completedParcels.reduce((sum, p) => sum + (p.fare * 0.8), 0);
+    const totalEarnings = completedParcels.reduce(
+      (sum, p) => sum + computeRiderParcelEarnings(p, settings),
+      0,
+    );
     const roundedEarnings = Math.round((totalEarnings + Number.EPSILON) * 100) / 100;
 
     return handleResponse(res, 200, "Rider earnings retrieved successfully", {
       totalDeliveries,
       totalEarnings: roundedEarnings,
+      riderBaseFareSharePercent: settings.riderBaseFareSharePercent,
+      riderDistanceFareSharePercent: settings.riderDistanceFareSharePercent,
       deliveries: completedParcels,
     });
   } catch (error) {
     return handleResponse(res, 500, error.message);
+  }
+};
+
+export const riderGetAvailableParcels = async (req, res) => {
+  try {
+    const parcels = await fetchAvailableParcelsForRider(req.user.id);
+    const settings = await ParcelConfig.getSearchSettings();
+    const withEarnings = parcels.map((parcel) => ({
+      ...parcel,
+      riderBaseFareSharePercent: settings.riderBaseFareSharePercent,
+      riderDistanceFareSharePercent: settings.riderDistanceFareSharePercent,
+      earnings: computeRiderParcelEarnings(parcel, settings),
+    }));
+    return handleResponse(
+      res,
+      200,
+      withEarnings.length ? "Available parcels fetched" : "No parcels found",
+      withEarnings,
+    );
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
+export const riderAcceptParcel = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    const idempotencyKey = req.headers["idempotency-key"] || req.body?.idempotencyKey;
+
+    if (!parcelId) {
+      return handleResponse(res, 400, "Parcel ID is required");
+    }
+
+    const { parcel, duplicate } = await parcelAcceptAtomic(
+      req.user.id,
+      parcelId,
+      idempotencyKey,
+    );
+
+    return handleResponse(
+      res,
+      200,
+      duplicate ? "Parcel already accepted" : "Parcel accepted successfully",
+      parcel,
+    );
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+export const riderRejectParcel = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    if (!parcelId) {
+      return handleResponse(res, 400, "Parcel ID is required");
+    }
+
+    await parcelRejectAtomic(req.user.id, parcelId);
+    return handleResponse(res, 200, "Parcel offer skipped");
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
   }
 };

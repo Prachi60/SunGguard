@@ -54,7 +54,7 @@ export const getDeliveryPartners = async (req, res) => {
       "isVerified",
       "isParcelService",
       "isQuickCommerceService",
-      "isCarWashService",
+      // CAR WASH DISABLED — "isCarWashService",
       "experience",
       "experienceDetails",
       "currentArea",
@@ -87,7 +87,8 @@ export const getDeliveryPartnerById = async (req, res) => {
   try {
     const rider = await Delivery.findById(req.params.id)
       .select(
-        "name phone email address vehicleType vehicleNumber drivingLicenseNumber aadharNumber panNumber accountHolder accountNumber ifsc profileImage documents isVerified isParcelService isQuickCommerceService isCarWashService experience experienceDetails currentArea createdAt",
+        "name phone email address vehicleType vehicleNumber drivingLicenseNumber aadharNumber panNumber accountHolder accountNumber ifsc profileImage documents isVerified isParcelService isQuickCommerceService experience experienceDetails currentArea createdAt",
+        // CAR WASH DISABLED — removed isCarWashService from select
       )
       .lean();
     if (!rider) {

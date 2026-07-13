@@ -1,3 +1,6 @@
+/**
+ * CAR WASH FEATURE DISABLED — not wired into admin routes.
+ */
 import React, { useState, useEffect, useCallback } from "react";
 import {
   Sparkles,

@@ -20,8 +20,9 @@ import ApplicationPending from '../../modules/seller/pages/ApplicationPending';
 import AdminAuth from '../../modules/admin/pages/AdminAuth';
 import DeliveryAuth from '../../modules/delivery/pages/DeliveryAuth';
 import DeliveryApplicationPending from '../../modules/delivery/pages/ApplicationPending';
-import CarWashPartnerAuth from '../../modules/delivery/pages/CarWashPartnerAuth';
-import CarWashPartnerDashboard from '../../modules/delivery/pages/CarWashPartnerDashboard';
+// CAR WASH DISABLED
+// import CarWashPartnerAuth from '../../modules/delivery/pages/CarWashPartnerAuth';
+// import CarWashPartnerDashboard from '../../modules/delivery/pages/CarWashPartnerDashboard';
 import CustomerAuth from '../../modules/customer/pages/CustomerAuth';
 
 // Customer Pages (lazy-loaded)
@@ -50,8 +51,9 @@ const SearchPage = lazy(() => import('../../modules/customer/pages/SearchPage'))
 const WalletPage = lazy(() => import('../../modules/customer/pages/WalletPage'));
 const ParcelDeliveryPage = lazy(() => import('../../modules/customer/pages/ParcelDeliveryPage'));
 const ParcelSearchTrackingPage = lazy(() => import('../../modules/customer/pages/ParcelSearchTrackingPage'));
-const CarWashBookingPage = lazy(() => import('../../modules/customer/pages/CarWashBookingPage'));
-const CarWashTrackingPage = lazy(() => import('../../modules/customer/pages/CarWashTrackingPage'));
+// CAR WASH DISABLED
+// const CarWashBookingPage = lazy(() => import('../../modules/customer/pages/CarWashBookingPage'));
+// const CarWashTrackingPage = lazy(() => import('../../modules/customer/pages/CarWashTrackingPage'));
 
 
 // Lazy load heavy modules
@@ -125,24 +127,25 @@ const AppRouter = () => {
                         </ProtectedRoute>
                     ),
                 },
-                {
-                    path: 'delivery/car-wash-auth',
-                    element: <CarWashPartnerAuth />,
-                },
-                {
-                    path: 'car-wash/partner/auth',
-                    element: <CarWashPartnerAuth />,
-                },
-                {
-                    path: 'car-wash/partner/dashboard',
-                    element: (
-                        <ProtectedRoute>
-                            <RoleGuard allowedRoles={[UserRole.DELIVERY]}>
-                                <CarWashPartnerDashboard />
-                            </RoleGuard>
-                        </ProtectedRoute>
-                    ),
-                },
+                // CAR WASH DISABLED — partner auth / dashboard routes
+                // {
+                //     path: 'delivery/car-wash-auth',
+                //     element: <CarWashPartnerAuth />,
+                // },
+                // {
+                //     path: 'car-wash/partner/auth',
+                //     element: <CarWashPartnerAuth />,
+                // },
+                // {
+                //     path: 'car-wash/partner/dashboard',
+                //     element: (
+                //         <ProtectedRoute>
+                //             <RoleGuard allowedRoles={[UserRole.DELIVERY]}>
+                //                 <CarWashPartnerDashboard />
+                //             </RoleGuard>
+                //         </ProtectedRoute>
+                //     ),
+                // },
                 {
                     path: 'seller/*',
                     element: (
@@ -204,8 +207,9 @@ const AppRouter = () => {
                         { path: 'wallet', element: <ProtectedRoute><WalletPage /></ProtectedRoute> },
                         { path: 'parcel', element: <ProtectedRoute><ParcelDeliveryPage /></ProtectedRoute> },
                         { path: 'parcel/search/:id', element: <ProtectedRoute><ParcelSearchTrackingPage /></ProtectedRoute> },
-                        { path: 'car-wash', element: <ProtectedRoute><CarWashBookingPage /></ProtectedRoute> },
-                        { path: 'car-wash/track/:id', element: <ProtectedRoute><CarWashTrackingPage /></ProtectedRoute> },
+                        // CAR WASH DISABLED — customer booking / tracking
+                        // { path: 'car-wash', element: <ProtectedRoute><CarWashBookingPage /></ProtectedRoute> },
+                        // { path: 'car-wash/track/:id', element: <ProtectedRoute><CarWashTrackingPage /></ProtectedRoute> },
 
                         { path: 'search', element: <SearchPage /> },
                     ]

@@ -1,3 +1,6 @@
+/**
+ * CAR WASH FEATURE DISABLED — page unmounted from AppRouter.
+ */
 import React, { useState, useEffect } from "react";
 import {
   Bell,

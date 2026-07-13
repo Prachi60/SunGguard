@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Bell, Smartphone, Moon, Globe, ChevronRight, Truck, Sparkles, Store } from "lucide-react";
+import { ArrowLeft, Bell, Smartphone, Moon, Globe, ChevronRight, Truck, Store } from "lucide-react";
+// CAR WASH DISABLED — Sparkles
 import Button from "@/shared/components/ui/Button";
 import Card from "@/shared/components/ui/Card";
 import { toast } from "sonner";
@@ -92,6 +93,7 @@ const Settings = () => {
               </div>
             </div>
 
+            {/* CAR WASH DISABLED — doorstep wash service toggle
             <div 
               className="p-4 flex justify-between items-center cursor-pointer" 
               onClick={() => handleToggleService('isCarWashService', user?.isCarWashService)}
@@ -107,6 +109,7 @@ const Settings = () => {
                 <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-200 ease-in-out ${user?.isCarWashService ? 'translate-x-6' : 'translate-x-0'}`} />
               </div>
             </div>
+            */}
           </Card>
         </section>
 

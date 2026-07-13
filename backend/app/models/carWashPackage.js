@@ -1,3 +1,6 @@
+/**
+ * CAR WASH FEATURE DISABLED — model unused while /car-wash API is unmounted.
+ */
 import mongoose from "mongoose";
 
 const carWashPackageSchema = new mongoose.Schema(

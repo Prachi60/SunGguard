@@ -34,8 +34,9 @@ const Dashboard = () => {
   const [isOnline, setIsOnline] = useState(user?.isOnline || false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [activeTab, setActiveTab] = useState(
-    user?.isParcelService ? "delivery" : (user?.isCarWashService ? "car-wash" : "delivery")
-  ); // 'delivery', 'return', 'parcel', 'car-wash'
+    user?.isParcelService ? "delivery" : "delivery"
+    // CAR WASH DISABLED — previously: user?.isCarWashService ? "car-wash" : "delivery"
+  ); // 'delivery', 'return', 'parcel'
   const [availableOrders, setAvailableOrders] = useState([]);
   const [assignedParcel, setAssignedParcel] = useState(null);
   const [earnings, setEarnings] = useState({

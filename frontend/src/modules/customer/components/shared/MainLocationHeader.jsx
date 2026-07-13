@@ -15,7 +15,9 @@ import {
   shiftHex,
 } from "../../utils/headerTheme";
 import LogoImage from "../../../../assets/Logo.png";
-import { Package, Car } from "lucide-react";
+import { Package } from "lucide-react";
+// CAR WASH DISABLED — Car icon
+// import { Package, Car } from "lucide-react";
 
 // MUI Icons
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
@@ -430,6 +432,7 @@ const MainLocationHeader = ({
                   <Package size={15} strokeWidth={2.5} />
                   Parcel
                 </button>
+                {/* CAR WASH DISABLED
                 <button
                   type="button"
                   onClick={() => navigate("/car-wash")}
@@ -439,6 +442,7 @@ const MainLocationHeader = ({
                   <Car size={15} strokeWidth={2.5} />
                   Car Wash
                 </button>
+                */}
               </div>
 
               <motion.button

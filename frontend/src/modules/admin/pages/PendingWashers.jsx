@@ -1,3 +1,6 @@
+/**
+ * CAR WASH FEATURE DISABLED — not wired into admin routes.
+ */
 import React, { useState, useMemo } from 'react';
 import Card from '@shared/components/ui/Card';
 import Badge from '@shared/components/ui/Badge';

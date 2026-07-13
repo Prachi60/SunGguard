@@ -375,7 +375,7 @@ const DeliveryLayout = () => {
     "/delivery/login",
     "/delivery/auth",
     "/delivery/pending-approval",
-    "/delivery/car-wash-auth",
+    // CAR WASH DISABLED — "/delivery/car-wash-auth",
     "/delivery/splash",
     "/delivery/navigation",
     "/delivery/confirm-delivery",

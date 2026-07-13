@@ -16,7 +16,7 @@ import {
   X,
   Camera,
   XCircle,
-  Sparkles,
+  // CAR WASH DISABLED — Sparkles,
   Truck,
   Package,
   Store,
@@ -1094,6 +1094,7 @@ const DeliveryAuth = () => {
                         )}
                       </button>
 
+                      {/* CAR WASH DISABLED — partner login link
                       <div className="text-center pt-4 border-t border-gray-100 mt-4">
                         <button
                           type="button"
@@ -1104,6 +1105,7 @@ const DeliveryAuth = () => {
                           Are you a Car Wash Partner? Click here
                         </button>
                       </div>
+                      */}
                     </div>
                   )}
                 </motion.div>

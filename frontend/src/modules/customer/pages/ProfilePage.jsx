@@ -2,7 +2,8 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
     User, MapPin, Package, CreditCard, Wallet, ChevronRight,
-    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, Sparkles, Car, History
+    LogOut, ShieldCheck, Heart, HelpCircle, Info, Edit2, ChevronLeft, Bell, History
+    // CAR WASH DISABLED — Car, Sparkles
 } from 'lucide-react';
 import { useAuth } from '@core/context/AuthContext';
 import { useSettings } from '@core/context/SettingsContext';
@@ -166,6 +167,7 @@ const ProfilePage = () => {
                                 color="#0ea5e9"
                                 bg="rgba(14,165,233,0.10)"
                             />
+                            {/* CAR WASH DISABLED
                             <MenuItem
                                 icon={Car}
                                 label="Car Wash History"
@@ -174,6 +176,7 @@ const ProfilePage = () => {
                                 color="#0891b2"
                                 bg="rgba(8,145,178,0.10)"
                             />
+                            */}
                             <MenuItem
                                 icon={CreditCard}
                                 label="Order Transactions"
@@ -239,7 +242,7 @@ const ProfilePage = () => {
                         </div>
                     </div>
 
-                    {/* Partner Program */}
+                    {/* CAR WASH DISABLED — partner registration section
                     <div className="bg-white rounded-xl overflow-hidden border border-slate-200">
                         <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
                             <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Join Our Partner Network</p>
@@ -255,6 +258,7 @@ const ProfilePage = () => {
                             />
                         </div>
                     </div>
+                    */}
                 </div>
 
                 {/* Logout Button */}

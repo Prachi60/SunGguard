@@ -4,7 +4,8 @@ import DeliveryLayout from "../layout/DeliveryLayout";
 import { setActiveRole, ROLES } from "@core/auth/activeRoleStore";
 import Splash from "../pages/Splash";
 import DeliveryAuth from "../pages/DeliveryAuth";
-import CarWashPartnerAuth from "../pages/CarWashPartnerAuth";
+// CAR WASH DISABLED
+// import CarWashPartnerAuth from "../pages/CarWashPartnerAuth";
 import Dashboard from "../pages/Dashboard";
 import OrderDetails from "../pages/OrderDetails";
 import Navigation from "../pages/Navigation";
@@ -35,7 +36,8 @@ const DeliveryRoutes = () => {
         <Route path="splash" element={<Splash />} />
 
         <Route path="auth" element={<DeliveryAuth />} />
-        <Route path="car-wash-auth" element={<CarWashPartnerAuth />} />
+        {/* CAR WASH DISABLED */}
+        {/* <Route path="car-wash-auth" element={<CarWashPartnerAuth />} /> */}
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="order-details/:orderId" element={<OrderDetails />} />
         <Route path="navigation" element={<Navigation />} />

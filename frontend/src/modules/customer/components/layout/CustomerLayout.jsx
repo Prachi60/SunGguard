@@ -90,7 +90,7 @@ const CustomerLayout = ({ children, showHeader: showHeaderProp, fullHeight = fal
         : (!hideHeaderRoutes.includes(path) &&
             !path.startsWith('/category') &&
             !path.startsWith('/orders') &&
-            !path.startsWith('/car-wash') &&
+            // CAR WASH DISABLED — !path.startsWith('/car-wash') &&
             !path.startsWith('/parcel') &&
             !isParcelSearchPage);
     const showBottomNav = showBottomNavProp !== undefined

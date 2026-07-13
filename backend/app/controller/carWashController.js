@@ -1,3 +1,7 @@
+/**
+ * CAR WASH FEATURE DISABLED
+ * This module is not mounted (see routes/index.js). Keep for re-enable later.
+ */
 import CarWashBooking from "../models/carWashBooking.js";
 import CarWashPackage from "../models/carWashPackage.js";
 import CarWashConfig from "../models/carWashConfig.js";

@@ -1,3 +1,7 @@
+/**
+ * CAR WASH FEATURE DISABLED — page unmounted from AppRouter.
+ * Re-enable by uncommenting lazy import + route in AppRouter.jsx.
+ */
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {

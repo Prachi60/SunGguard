@@ -31,7 +31,8 @@ const formatServiceTypes = (rider) => {
     const services = [];
     if (rider.isParcelService) services.push("Parcel");
     if (rider.isQuickCommerceService) services.push("Quick Orders");
-    if (rider.isCarWashService) services.push("Car Wash");
+    // CAR WASH DISABLED
+    // if (rider.isCarWashService) services.push("Car Wash");
     return services.length ? services.join(" · ") : "Not specified";
 };
 
@@ -91,13 +92,13 @@ const mapDeliveryPartner = (r) => ({
     experience: r.experience || 'Not Specified',
     experienceDetails: r.experienceDetails || '',
     preferredArea: r.address || r.currentArea || 'Not Specified',
-    isCarWashService: r.isCarWashService,
+    // CAR WASH DISABLED — isCarWashService: r.isCarWashService,
     isParcelService: r.isParcelService,
     isQuickCommerceService: r.isQuickCommerceService !== false,
     serviceLabel: formatServiceTypes({
         isParcelService: r.isParcelService,
         isQuickCommerceService: r.isQuickCommerceService !== false,
-        isCarWashService: r.isCarWashService,
+        // CAR WASH DISABLED — isCarWashService: r.isCarWashService,
     }),
 });
 
@@ -115,7 +116,7 @@ const PendingDeliveryBoys = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [filterStatus, setFilterStatus] = useState('all');
-    const [serviceFilter, setServiceFilter] = useState('all'); // 'all', 'rider', 'washer'
+    const [serviceFilter, setServiceFilter] = useState('all'); // 'all', 'rider' — CAR WASH DISABLED: 'washer'
     const [viewingRider, setViewingRider] = useState(null);
     const [identityDraft, setIdentityDraft] = useState({ aadhar: "", pan: "" });
     const [isSavingIdentity, setIsSavingIdentity] = useState(false);
@@ -237,8 +238,8 @@ const filteredRiders = useMemo(() => {
             r.status === filterStatus ||
             (filterStatus === 'pending' && r.status === 'pending_review');
         const matchesService = serviceFilter === 'all' ||
-            (serviceFilter === 'rider' && r.isParcelService) ||
-            (serviceFilter === 'washer' && r.isCarWashService);
+            (serviceFilter === 'rider' && r.isParcelService);
+            // CAR WASH DISABLED — (serviceFilter === 'washer' && r.isCarWashService);
         return matchesSearch && matchesStatus && matchesService;
     });
 }, [pendingRiders, searchTerm, filterStatus, serviceFilter]);
@@ -336,7 +337,7 @@ return (
                         {[
                             { value: 'all', label: 'All Services' },
                             { value: 'rider', label: 'Riders' },
-                            { value: 'washer', label: 'Washers' }
+                            // CAR WASH DISABLED — { value: 'washer', label: 'Washers' }
                         ].map((srv) => (
                             <button
                                 key={srv.value}
@@ -403,9 +404,11 @@ return (
                                             <div>
                                                 <div className="flex items-center gap-2">
                                                     <p className="text-sm font-black text-slate-900">{rider.name}</p>
+                                                    {/* CAR WASH DISABLED
                                                     {rider.isCarWashService && (
                                                         <Badge variant="info" className="text-[8px] font-black uppercase px-1.5 py-0.5">Washer</Badge>
                                                     )}
+                                                    */}
                                                     {rider.isQuickCommerceService && (
                                                         <Badge variant="warning" className="text-[8px] font-black uppercase px-1.5 py-0.5">Quick Orders</Badge>
                                                     )}
@@ -536,11 +539,14 @@ return (
                                         {viewingRider.isParcelService && (
                                             <Badge variant="primary" className="text-[9px] font-black uppercase">Parcel Delivery</Badge>
                                         )}
+                                        {/* CAR WASH DISABLED
                                         {viewingRider.isCarWashService && (
                                             <Badge variant="info" className="text-[9px] font-black uppercase">Car Wash Service</Badge>
                                         )}
+                                        */}
                                     </div>
                                 </div>
+                                {/* CAR WASH DISABLED
                                 {viewingRider.isCarWashService && (
                                     <div className="space-y-1 pt-4 border-t border-slate-100">
                                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Detailing Experience</p>
@@ -554,6 +560,7 @@ return (
                                         </div>
                                     </div>
                                 )}
+                                */}
                                 <div className="space-y-1 pt-4 border-t border-slate-100">
                                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Identity Numbers</p>
                                     <div className="bg-white rounded-xl p-3 border border-slate-100 mt-1 space-y-3">

@@ -16,7 +16,9 @@ import {
   Phone,
   FileText,
   AlertTriangle,
-  ChevronLeft
+  ChevronLeft,
+  Building2,
+  CalendarDays,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { parcelApi } from '../services/parcelApi';
@@ -28,6 +30,65 @@ import { STORAGE_KEYS } from '@core/utils/storage';
 import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from '@react-google-maps/api';
 
 const getCustomerToken = createSocketTokenReader(STORAGE_KEYS.AUTH_CUSTOMER);
+
+const COURIER_COMPANIES = [
+  'Blue Dart',
+  'DTDC',
+  'Delhivery',
+  'India Post',
+  'Ekart',
+  'Ecom Express',
+  'XpressBees',
+  'FedEx',
+  'DHL',
+  'Shadowfax',
+];
+
+const DESTINATION_CITIES = [
+  { name: 'Mumbai', lat: 19.076, lng: 72.8777 },
+  { name: 'Delhi', lat: 28.6139, lng: 77.209 },
+  { name: 'Bengaluru', lat: 12.9716, lng: 77.5946 },
+  { name: 'Hyderabad', lat: 17.385, lng: 78.4867 },
+  { name: 'Chennai', lat: 13.0827, lng: 80.2707 },
+  { name: 'Kolkata', lat: 22.5726, lng: 88.3639 },
+  { name: 'Pune', lat: 18.5204, lng: 73.8567 },
+  { name: 'Ahmedabad', lat: 23.0225, lng: 72.5714 },
+  { name: 'Jaipur', lat: 26.9124, lng: 75.7873 },
+  { name: 'Surat', lat: 21.1702, lng: 72.8311 },
+  { name: 'Lucknow', lat: 26.8467, lng: 80.9462 },
+  { name: 'Chandigarh', lat: 30.7333, lng: 76.7794 },
+  { name: 'Indore', lat: 22.7196, lng: 75.8577 },
+  { name: 'Bhopal', lat: 23.2599, lng: 77.4126 },
+  { name: 'Nagpur', lat: 21.1458, lng: 79.0882 },
+  { name: 'Patna', lat: 25.5941, lng: 85.1376 },
+  { name: 'Kochi', lat: 9.9312, lng: 76.2673 },
+  { name: 'Coimbatore', lat: 11.0168, lng: 76.9558 },
+  { name: 'Visakhapatnam', lat: 17.6868, lng: 83.2185 },
+  { name: 'Other', lat: 20.5937, lng: 78.9629 },
+];
+
+const PICKUP_WINDOWS = [
+  { value: 'today', label: 'Today only', days: 0, helper: 'Book for today' },
+  { value: '7_days', label: 'For 7 days', days: 7, helper: 'Book daily for 7 days' },
+  { value: '15_days', label: 'For 15 days', days: 15, helper: 'Book daily for 15 days' },
+  { value: '30_days', label: 'For 30 days', days: 30, helper: 'Book daily for 30 days' },
+  { value: 'specific', label: 'Till a date', days: null, helper: 'Book until a specific date' },
+];
+
+const addDaysToDateInput = (days) => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + Number(days || 0));
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const todayDateInputValue = () => addDaysToDateInput(0);
+
+const getCityCoords = (cityName) =>
+  DESTINATION_CITIES.find((c) => c.name === cityName) || null;
 
 const formatParcelStatusLabel = (status) => {
   if (status === 'SEARCHING') return 'Searching for rider';
@@ -160,14 +221,6 @@ const ParcelDeliveryPage = () => {
     lng: null
   });
 
-  const [dropDetails, setDropDetails] = useState({
-    name: '',
-    phone: '',
-    fullAddress: '',
-    lat: null,
-    lng: null
-  });
-
   const [packageTypes, setPackageTypes] = useState([
     { value: "document", label: "Document / Paper" },
     { value: "food", label: "Food Items" },
@@ -175,7 +228,7 @@ const ParcelDeliveryPage = () => {
     { value: "electronics", label: "Electronics" },
     { value: "other", label: "Other Packets" },
   ]);
-  const [maxWeightKg, setMaxWeightKg] = useState(5);
+  const [maxWeightKg, setMaxWeightKg] = useState(1);
   const [packageDescriptionPlaceholder, setPackageDescriptionPlaceholder] = useState(
     "E.g. keys, critical document papers...",
   );
@@ -185,6 +238,31 @@ const ParcelDeliveryPage = () => {
   const [weightUnit, setWeightUnit] = useState("kg"); // 'kg' | 'gm'
   const [description, setDescription] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('COD');
+  const [courierCompany, setCourierCompany] = useState('');
+  const [destinationCity, setDestinationCity] = useState('');
+  const [pickupWindow, setPickupWindow] = useState('today');
+  const [preferredPickupDate, setPreferredPickupDate] = useState(todayDateInputValue());
+
+  const selectedCity = useMemo(
+    () => (destinationCity ? getCityCoords(destinationCity) : null),
+    [destinationCity],
+  );
+
+  const selectedPickupWindow = useMemo(
+    () => PICKUP_WINDOWS.find((w) => w.value === pickupWindow) || PICKUP_WINDOWS[0],
+    [pickupWindow],
+  );
+
+  const handlePickupWindowChange = (value) => {
+    setPickupWindow(value);
+    const option = PICKUP_WINDOWS.find((w) => w.value === value);
+    if (!option) return;
+    if (option.value !== 'specific' && option.days != null) {
+      setPreferredPickupDate(addDaysToDateInput(option.days));
+    } else if (!preferredPickupDate || preferredPickupDate < todayDateInputValue()) {
+      setPreferredPickupDate(todayDateInputValue());
+    }
+  };
 
   // Always in KG for fare API / booking payload.
   const weightKg = useMemo(() => {
@@ -201,7 +279,7 @@ const ParcelDeliveryPage = () => {
   const [estimating, setEstimating] = useState(false);
 
   // Map Selection states
-  const [mapPickerTarget, setMapPickerTarget] = useState(null); // 'pickup' or 'drop'
+  const [mapPickerTarget, setMapPickerTarget] = useState(null); // 'pickup' only
   
   // Tracking state
   const [trackingParcel, setTrackingParcel] = useState(null);
@@ -231,7 +309,7 @@ const ParcelDeliveryPage = () => {
           types.some((t) => t.value === prev) ? prev : types[0].value,
         );
       }
-      if (cfg.maxWeightKg != null) setMaxWeightKg(Number(cfg.maxWeightKg) || 5);
+      if (cfg.maxWeightKg != null) setMaxWeightKg(Number(cfg.maxWeightKg) || 1);
       if (cfg.packageDescriptionPlaceholder) {
         setPackageDescriptionPlaceholder(cfg.packageDescriptionPlaceholder);
       }
@@ -271,8 +349,8 @@ const ParcelDeliveryPage = () => {
       if (
         pickupDetails.lat &&
         pickupDetails.lng &&
-        dropDetails.lat &&
-        dropDetails.lng &&
+        selectedCity?.lat &&
+        selectedCity?.lng &&
         weightKg > 0
       ) {
         setEstimating(true);
@@ -280,8 +358,8 @@ const ParcelDeliveryPage = () => {
           const res = await parcelApi.calculateFare({
             pickupLat: pickupDetails.lat,
             pickupLng: pickupDetails.lng,
-            dropLat: dropDetails.lat,
-            dropLng: dropDetails.lng,
+            dropLat: selectedCity.lat,
+            dropLng: selectedCity.lng,
             weight: weightKg,
           });
           if (res.data && res.data.success) {
@@ -292,12 +370,14 @@ const ParcelDeliveryPage = () => {
         } finally {
           setEstimating(false);
         }
+      } else {
+        setFareEstimation(null);
       }
     };
 
     const delayDebounce = setTimeout(calcFare, 500);
     return () => clearTimeout(delayDebounce);
-  }, [pickupDetails.lat, pickupDetails.lng, dropDetails.lat, dropDetails.lng, weightKg]);
+  }, [pickupDetails.lat, pickupDetails.lng, selectedCity?.lat, selectedCity?.lng, weightKg]);
 
   // Map Selection Confirmation
   const handleMapConfirm = (location) => {
@@ -309,14 +389,6 @@ const ParcelDeliveryPage = () => {
         lng: location.lng
       }));
       toast.success("Pickup location updated!");
-    } else if (mapPickerTarget === 'drop') {
-      setDropDetails(prev => ({
-        ...prev,
-        fullAddress: location.address || '',
-        lat: location.lat,
-        lng: location.lng
-      }));
-      toast.success("Dropoff location updated!");
     }
     setMapPickerTarget(null);
   };
@@ -327,17 +399,8 @@ const ParcelDeliveryPage = () => {
     if (!pickupDetails.fullAddress || !pickupDetails.lat || !pickupDetails.lng) {
       return toast.error("Please select a valid Pickup address.");
     }
-    if (!dropDetails.fullAddress || !dropDetails.lat || !dropDetails.lng) {
-      return toast.error("Please select a valid Dropoff address.");
-    }
     if (!pickupDetails.name || !pickupDetails.phone) {
       return toast.error("Please enter sender details.");
-    }
-    if (!dropDetails.name || !dropDetails.phone) {
-      return toast.error("Please enter receiver details.");
-    }
-    if (!/^\d{10}$/.test(String(dropDetails.phone).trim())) {
-      return toast.error("Receiver phone must be exactly 10 digits.");
     }
     if (weightKg <= 0 || weightKg > maxWeightKg) {
       return toast.error(
@@ -347,17 +410,51 @@ const ParcelDeliveryPage = () => {
     if (!packageTypes.some((t) => t.value === packageType)) {
       return toast.error("Please select a valid package type.");
     }
+    if (!courierCompany) {
+      return toast.error("Please select a courier company.");
+    }
+    if (!destinationCity || !selectedCity) {
+      return toast.error("Please select destination city.");
+    }
+    if (!pickupWindow) {
+      return toast.error("Please select how long you want to book for.");
+    }
+    if (!preferredPickupDate) {
+      return toast.error("Please select preferred pickup date.");
+    }
+    if (preferredPickupDate < todayDateInputValue()) {
+      return toast.error("Preferred pickup date cannot be in the past.");
+    }
+
+    const dropAddress = {
+      name: courierCompany,
+      phone: String(pickupDetails.phone || '').replace(/\D/g, '').slice(-10) || '0000000000',
+      fullAddress: `${courierCompany} drop point, ${destinationCity}`,
+      lat: selectedCity.lat,
+      lng: selectedCity.lng,
+    };
+
+    const resolvedPickupDate =
+      selectedPickupWindow.value === 'specific'
+        ? preferredPickupDate
+        : addDaysToDateInput(selectedPickupWindow.days);
 
     setLoading(true);
     try {
       const response = await parcelApi.createParcel({
         pickupAddress: pickupDetails,
-        dropAddress: dropDetails,
+        dropAddress,
         packageDetails: {
           packageType,
           weight: weightKg,
           description
         },
+        courierCompany,
+        destinationCity,
+        pickupWindow: selectedPickupWindow.value,
+        pickupWindowDays:
+          selectedPickupWindow.value === 'specific' ? null : selectedPickupWindow.days,
+        preferredPickupDate: resolvedPickupDate,
         paymentMethod
       });
 
@@ -365,8 +462,11 @@ const ParcelDeliveryPage = () => {
         toast.success("Parcel delivery requested successfully!");
         const createdParcel = response.data.result;
         // Reset form
-        setDropDetails({ name: '', phone: '', fullAddress: '', lat: null, lng: null });
         setDescription('');
+        setCourierCompany('');
+        setDestinationCity('');
+        setPickupWindow('today');
+        setPreferredPickupDate(todayDateInputValue());
         setWeightInput("0.2");
         setWeightUnit("kg");
         setFareEstimation(null);
@@ -562,65 +662,138 @@ const ParcelDeliveryPage = () => {
             {/* Dropoff Details Card */}
             <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
               <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                <MapPin className="text-red-500" size={20} /> Dropoff Point
+                <MapPin className="text-red-500" size={20} /> Dropoff Details
               </h2>
-              
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Receiver Name</label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                    <input
-                      type="text"
-                      required
-                      placeholder="Name"
-                      value={dropDetails.name}
-                      onChange={(e) => setDropDetails(d => ({ ...d, name: e.target.value }))}
-                      className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                    />
-                  </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Courier Company
+                </label>
+                <div className="relative">
+                  <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                  <select
+                    required
+                    value={courierCompany}
+                    onChange={(e) => setCourierCompany(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-primary focus:ring-1 focus:ring-primary appearance-none"
+                  >
+                    <option value="">Select courier company</option>
+                    {COURIER_COMPANIES.map((company) => (
+                      <option key={company} value={company}>
+                        {company}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Receiver Phone</label>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                    <input
-                      type="tel"
-                      inputMode="numeric"
-                      pattern="[0-9]{10}"
-                      maxLength={10}
-                      required
-                      placeholder="10-digit phone"
-                      value={dropDetails.phone}
-                      onChange={(e) => {
-                        const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 10);
-                        setDropDetails((d) => ({ ...d, phone: digitsOnly }));
-                      }}
-                      className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                    />
-                  </div>
-                </div>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  Which courier company should receive this parcel?
+                </p>
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Full Dropoff Address</label>
-                <textarea
-                  required
-                  rows={2}
-                  placeholder="Address details, landmark, contact info..."
-                  value={dropDetails.fullAddress}
-                  onChange={(e) => setDropDetails(d => ({ ...d, fullAddress: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                />
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Destination City
+                </label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                  <select
+                    required
+                    value={destinationCity}
+                    onChange={(e) => setDestinationCity(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-primary focus:ring-1 focus:ring-primary appearance-none"
+                  >
+                    <option value="">Select city</option>
+                    {DESTINATION_CITIES.map((city) => (
+                      <option key={city.name} value={city.name}>
+                        {city.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  Which city should this parcel go to?
+                </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setMapPickerTarget('drop')}
-                className="w-full py-2.5 rounded-xl border border-dashed border-red-500 bg-red-50 hover:bg-red-100/60 text-red-600 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
-              >
-                <MapPin size={14} /> Choose on Map {dropDetails.lat ? '✓ (Selected)' : ''}
-              </button>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Book for how long?
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {PICKUP_WINDOWS.map((windowOption) => (
+                    <button
+                      key={windowOption.value}
+                      type="button"
+                      onClick={() => handlePickupWindowChange(windowOption.value)}
+                      className={`rounded-xl border-2 px-3 py-2.5 text-left transition-all ${
+                        pickupWindow === windowOption.value
+                          ? 'border-primary bg-primary/5 text-primary'
+                          : 'border-slate-100 bg-white text-slate-700 hover:border-slate-200'
+                      }`}
+                    >
+                      <span className="block text-xs font-black">{windowOption.label}</span>
+                      <span className={`block text-[10px] mt-0.5 font-medium ${
+                        pickupWindow === windowOption.value ? 'text-primary/70' : 'text-slate-400'
+                      }`}>
+                        {windowOption.helper}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  {selectedPickupWindow.helper}. Choose today, 7, 15, or 30 days.
+                </p>
+              </div>
+
+              {pickupWindow === 'specific' && (
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Book until date
+                  </label>
+                  <div className="relative">
+                    <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input
+                      type="date"
+                      required
+                      min={todayDateInputValue()}
+                      max={addDaysToDateInput(30)}
+                      value={preferredPickupDate}
+                      onChange={(e) => setPreferredPickupDate(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {pickupWindow !== 'specific' && (
+                <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 flex items-start gap-2">
+                  <Clock className="text-primary shrink-0 mt-0.5" size={14} />
+                  <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                    {selectedPickupWindow.days > 0 ? (
+                      <>
+                        Booking for{' '}
+                        <span className="font-bold text-slate-800">
+                          {selectedPickupWindow.days} days
+                        </span>
+                        {' '}— pickup available every day till{' '}
+                        <span className="font-bold text-slate-800">
+                          {new Date(addDaysToDateInput(selectedPickupWindow.days)).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })}
+                        </span>
+                        .
+                      </>
+                    ) : (
+                      <>
+                        Booking for{' '}
+                        <span className="font-bold text-slate-800">today only</span>.
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -793,16 +966,16 @@ const ParcelDeliveryPage = () => {
                 </div>
               )}
 
-              {!pickupDetails.lat || !dropDetails.lat ? (
+              {!pickupDetails.lat || !selectedCity ? (
                 <div className="flex items-center gap-2 text-amber-400 bg-amber-500/10 rounded-2xl p-3 text-xs font-semibold">
                   <AlertTriangle size={14} className="shrink-0" />
-                  Please select pickup and drop locations to view distance & fare estimates.
+                  Please select pickup location and destination city to view distance & fare estimates.
                 </div>
               ) : null}
 
               <button
                 type="submit"
-                disabled={loading || estimating || !pickupDetails.lat || !dropDetails.lat}
+                disabled={loading || estimating || !pickupDetails.lat || !selectedCity || !courierCompany}
                 className="w-full bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-all"
               >
                 {loading ? 'Processing Book...' : 'Request Delivery'}
@@ -865,7 +1038,10 @@ const ParcelDeliveryPage = () => {
                       <div className="flex gap-2">
                         <MapPin size={14} className="text-red-500 shrink-0 mt-0.5" />
                         <div className="text-xs text-slate-600 line-clamp-1">
-                          <strong className="text-slate-800">To:</strong> {parcel.dropAddress.fullAddress}
+                          <strong className="text-slate-800">To:</strong>{' '}
+                          {parcel.courierCompany
+                            ? `${parcel.courierCompany}${parcel.destinationCity ? `, ${parcel.destinationCity}` : ''}`
+                            : parcel.dropAddress?.fullAddress || '—'}
                         </div>
                       </div>
                     </div>
@@ -1029,11 +1205,54 @@ const ParcelDeliveryPage = () => {
                   </div>
 
                   <div className="flex gap-2 border-t border-slate-200/50 pt-3">
-                    <MapPin className="text-red-500 shrink-0 mt-0.5" size={16} />
+                    <Building2 className="text-red-500 shrink-0 mt-0.5" size={16} />
                     <div>
                       <strong className="text-xs text-slate-800 block">Dropoff details:</strong>
-                      <span className="text-xs text-slate-600">{trackingParcel.dropAddress.name} ({trackingParcel.dropAddress.phone})</span>
-                      <p className="text-xs text-slate-500 mt-0.5">{trackingParcel.dropAddress.fullAddress}</p>
+                      {trackingParcel.courierCompany && (
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          Courier: <span className="font-bold">{trackingParcel.courierCompany}</span>
+                        </p>
+                      )}
+                      {trackingParcel.destinationCity && (
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          City: <span className="font-bold">{trackingParcel.destinationCity}</span>
+                        </p>
+                      )}
+                      {trackingParcel.preferredPickupDate && (
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          Booked for:{' '}
+                          <span className="font-bold">
+                            {trackingParcel.pickupWindow === 'today'
+                              ? 'Today only'
+                              : trackingParcel.pickupWindow === '7_days'
+                                ? 'Booked for 7 days'
+                                : trackingParcel.pickupWindow === '15_days'
+                                  ? 'Booked for 15 days'
+                                  : trackingParcel.pickupWindow === '30_days'
+                                    ? 'Booked for 30 days'
+                                    : trackingParcel.pickupWindow === 'specific'
+                                      ? 'Till a date'
+                                      : 'Scheduled'}
+                            {' · '}
+                            {trackingParcel.pickupWindow && trackingParcel.pickupWindow !== 'specific' && trackingParcel.pickupWindow !== 'today'
+                              ? `till ${new Date(trackingParcel.preferredPickupDate).toLocaleDateString('en-IN', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                  year: 'numeric',
+                                })}`
+                              : new Date(trackingParcel.preferredPickupDate).toLocaleDateString('en-IN', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                  year: 'numeric',
+                                })}
+                          </span>
+                        </p>
+                      )}
+                      {!trackingParcel.courierCompany && !trackingParcel.destinationCity && (
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {trackingParcel.dropAddress?.fullAddress || '—'}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -1116,10 +1335,10 @@ const ParcelDeliveryPage = () => {
           isOpen={true}
           onClose={() => setMapPickerTarget(null)}
           onConfirm={handleMapConfirm}
-          initialLocation={mapPickerTarget === 'pickup' ? pickupDetails : dropDetails}
+          initialLocation={pickupDetails}
           preferCurrentLocationOnOpen={true}
-          title={mapPickerTarget === 'pickup' ? "Select Pickup Location" : "Select Dropoff Location"}
-          searchPlaceholder={mapPickerTarget === 'pickup' ? "Search for pickup area..." : "Search for dropoff area..."}
+          title="Select Pickup Location"
+          searchPlaceholder="Search for pickup area..."
           showRadius={false}
         />
       )}

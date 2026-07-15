@@ -1,16 +1,13 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, LayoutGrid, User, Package } from 'lucide-react';
-// CAR WASH DISABLED — removed Car icon import
-// import { Home, LayoutGrid, User, Package, Car } from 'lucide-react';
+import { Home, LayoutGrid, ClipboardList, Package, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
     { label: 'Home', icon: Home, path: '/' },
     { label: 'Category', icon: LayoutGrid, path: '/categories' },
+    { label: 'Orders', icon: ClipboardList, path: '/orders' },
     { label: 'Parcel', icon: Package, path: '/parcel' },
-    // CAR WASH DISABLED
-    // { label: 'Car Wash', icon: Car, path: '/car-wash' },
     { label: 'Profile', icon: User, path: '/profile' },
 ];
 

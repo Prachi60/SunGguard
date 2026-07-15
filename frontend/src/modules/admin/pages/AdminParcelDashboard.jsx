@@ -60,7 +60,7 @@ const AdminParcelDashboard = () => {
       { value: "electronics", label: "Electronics", isActive: true },
       { value: "other", label: "Other Packets", isActive: true },
     ],
-    maxWeightKg: 5,
+    maxWeightKg: 1,
     packageDescriptionPlaceholder: "E.g. keys, critical document papers...",
   });
   const [newPackageTypeLabel, setNewPackageTypeLabel] = useState("");
@@ -115,7 +115,7 @@ const AdminParcelDashboard = () => {
                 { value: "electronics", label: "Electronics", isActive: true },
                 { value: "other", label: "Other Packets", isActive: true },
               ],
-          maxWeightKg: cfg.maxWeightKg ?? 5,
+          maxWeightKg: cfg.maxWeightKg ?? 1,
           packageDescriptionPlaceholder:
             cfg.packageDescriptionPlaceholder ||
             "E.g. keys, critical document papers...",
@@ -521,7 +521,7 @@ const AdminParcelDashboard = () => {
                       <DollarSign className="text-primary" size={18} /> Customer Pricing
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
-                      Fare charged to customers for parcel bookings (up to {pricing.maxWeightKg || 5} KG).
+                      Fare charged to customers for parcel bookings (up to {pricing.maxWeightKg || 1} KG).
                     </p>
                   </div>
 

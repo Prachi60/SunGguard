@@ -102,7 +102,7 @@ export const calculateFare = async (req, res) => {
     }
 
     const config = await ParcelConfig.getOrCreate();
-    const maxWeightKg = Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 5));
+    const maxWeightKg = Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 1));
     const pkgWeight = Number(weight || 0.1);
     if (pkgWeight <= 0 || pkgWeight > maxWeightKg) {
       return handleResponse(
@@ -149,14 +149,82 @@ export const createParcel = async (req, res) => {
       dropAddress,
       packageDetails,
       paymentMethod,
+      courierCompany,
+      destinationCity,
+      preferredPickupDate,
+      pickupWindow,
+      pickupWindowDays,
     } = req.body;
 
     if (!pickupAddress || !dropAddress || !packageDetails || !paymentMethod) {
       return handleResponse(res, 400, "Missing required details");
     }
 
+    const courier = String(courierCompany || "").trim();
+    const city = String(destinationCity || "").trim();
+    if (!courier) {
+      return handleResponse(res, 400, "Please select a courier company");
+    }
+    if (!city) {
+      return handleResponse(res, 400, "Please select destination city");
+    }
+
+    const allowedWindows = ["today", "7_days", "15_days", "30_days", "specific"];
+    const windowValue = allowedWindows.includes(String(pickupWindow || "").trim())
+      ? String(pickupWindow).trim()
+      : "specific";
+
+    const windowDaysMap = {
+      today: 0,
+      "7_days": 7,
+      "15_days": 15,
+      "30_days": 30,
+      specific: null,
+    };
+
+    let resolvedWindowDays =
+      windowValue === "specific"
+        ? pickupWindowDays == null || pickupWindowDays === ""
+          ? null
+          : Number(pickupWindowDays)
+        : windowDaysMap[windowValue];
+
+    if (windowValue !== "specific" && !Number.isFinite(resolvedWindowDays)) {
+      resolvedWindowDays = windowDaysMap[windowValue] ?? 0;
+    }
+
+    if (!preferredPickupDate && windowValue === "specific") {
+      return handleResponse(res, 400, "Please select preferred pickup date");
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let pickupDate;
+    if (windowValue === "specific") {
+      pickupDate = new Date(preferredPickupDate);
+    } else {
+      pickupDate = preferredPickupDate
+        ? new Date(preferredPickupDate)
+        : new Date(today.getTime() + resolvedWindowDays * 24 * 60 * 60 * 1000);
+    }
+
+    if (Number.isNaN(pickupDate.getTime())) {
+      return handleResponse(res, 400, "Invalid preferred pickup date");
+    }
+    const pickupDay = new Date(pickupDate);
+    pickupDay.setHours(0, 0, 0, 0);
+    if (pickupDay < today) {
+      return handleResponse(res, 400, "Preferred pickup date cannot be in the past");
+    }
+    const maxDay = new Date(today);
+    maxDay.setDate(maxDay.getDate() + 30);
+    if (pickupDay > maxDay) {
+      return handleResponse(res, 400, "Preferred pickup date cannot be more than 30 days ahead");
+    }
+
     const config = await ParcelConfig.getOrCreate();
-    const maxWeightKg = Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 5));
+    const maxWeightKg = Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 1));
     const weight = Number(packageDetails.weight || 0);
     if (weight <= 0 || weight > maxWeightKg) {
       return handleResponse(
@@ -197,6 +265,11 @@ export const createParcel = async (req, res) => {
       pickupAddress,
       dropAddress,
       packageDetails,
+      courierCompany: courier,
+      destinationCity: city,
+      preferredPickupDate: pickupDate,
+      pickupWindow: windowValue,
+      pickupWindowDays: resolvedWindowDays,
       weight,
       distance: distanceKm,
       fare,
@@ -500,7 +573,7 @@ export const adminUpdatePricingConfig = async (req, res) => {
       config.packageTypes = ParcelConfig.normalizePackageTypes(packageTypes);
     }
     if (maxWeightKg !== undefined) {
-      config.maxWeightKg = Math.min(50, Math.max(0.1, Number(maxWeightKg) || 5));
+      config.maxWeightKg = Math.min(50, Math.max(0.1, Number(maxWeightKg) || 1));
     }
     if (packageDescriptionPlaceholder !== undefined) {
       config.packageDescriptionPlaceholder = String(

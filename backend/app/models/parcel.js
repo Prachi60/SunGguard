@@ -60,6 +60,34 @@ const parcelSchema = new mongoose.Schema(
       type: packageDetailsSchema,
       required: true,
     },
+    /** Preferred courier company for drop-off (e.g. Blue Dart, DTDC). */
+    courierCompany: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    /** Destination city where the parcel should go. */
+    destinationCity: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    /** Preferred date / window end for parcel pickup. */
+    preferredPickupDate: {
+      type: Date,
+      default: null,
+    },
+    /** When delivery boy can come: today | 7_days | 15_days | 30_days | specific */
+    pickupWindow: {
+      type: String,
+      enum: ["today", "7_days", "15_days", "30_days", "specific"],
+      default: "today",
+    },
+    /** Number of days in window (0 for today, null for specific date). */
+    pickupWindowDays: {
+      type: Number,
+      default: 0,
+    },
     weight: {
       type: Number,
       required: true,

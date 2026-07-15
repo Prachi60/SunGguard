@@ -79,7 +79,7 @@ const parcelConfigSchema = new mongoose.Schema(
     },
     maxWeightKg: {
       type: Number,
-      default: 5,
+      default: 1,
       min: 0.1,
       max: 50,
     },
@@ -145,7 +145,7 @@ parcelConfigSchema.statics.getOrCreate = async function () {
       riderBaseFareSharePercent: 80,
       riderDistanceFareSharePercent: 80,
       packageTypes: DEFAULT_PACKAGE_TYPES.map((t) => ({ ...t })),
-      maxWeightKg: 5,
+      maxWeightKg: 1,
       packageDescriptionPlaceholder: "E.g. keys, critical document papers...",
     });
     return config;
@@ -156,8 +156,8 @@ parcelConfigSchema.statics.getOrCreate = async function () {
     config.packageTypes = DEFAULT_PACKAGE_TYPES.map((t) => ({ ...t }));
     dirty = true;
   }
-  if (config.maxWeightKg == null || config.maxWeightKg <= 0) {
-    config.maxWeightKg = 5;
+  if (config.maxWeightKg == null || config.maxWeightKg <= 0 || Number(config.maxWeightKg) === 5) {
+    config.maxWeightKg = 1;
     dirty = true;
   }
   if (!config.packageDescriptionPlaceholder) {
@@ -179,7 +179,7 @@ parcelConfigSchema.statics.getPublicBookingConfig = async function () {
     packageTypes: packageTypes.length
       ? packageTypes
       : DEFAULT_PACKAGE_TYPES.map(({ value, label }) => ({ value, label })),
-    maxWeightKg: Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 5)),
+    maxWeightKg: Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 1)),
     packageDescriptionPlaceholder:
       config.packageDescriptionPlaceholder ||
       "E.g. keys, critical document papers...",

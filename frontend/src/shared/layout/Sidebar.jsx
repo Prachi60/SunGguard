@@ -228,7 +228,7 @@ const SidebarContent = ({ items, title, onClose, openMenu, handleToggle, hovered
         <div className="flex items-center space-x-2.5">
           {settings?.logoUrl ? (
             <div className="h-9 w-9 rounded-xl overflow-hidden shadow-sm ring-1 ring-white/10 group-hover:scale-110 transition-all duration-500 ease-out">
-              <img src={settings.logoUrl} alt={appName} className="h-full w-full object-contain" />
+              <img src={settings.logoUrl} alt={appName} className="h-full w-full object-cover" />
             </div>
           ) : (
             <div className="h-9 w-9 rounded-xl bg-primary flex items-center justify-center text-white shadow-sm transform -rotate-6 hover:rotate-0 transition-all duration-500 ease-out">
@@ -287,7 +287,7 @@ const SidebarContent = ({ items, title, onClose, openMenu, handleToggle, hovered
             <div className="relative group">
               {settings?.logoUrl ? (
                 <div className="h-8 w-8 rounded-lg overflow-hidden border border-white/10 shadow-lg group-hover:scale-110 transition-all duration-500">
-                  <img src={settings.logoUrl} alt={appName} className="h-full w-full object-contain" />
+                  <img src={settings.logoUrl} alt={appName} className="h-full w-full object-cover" />
                 </div>
               ) : (
                 <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary via-brand-500 to-violet-600 flex items-center justify-center text-white font-black text-xs shadow-lg group-hover:scale-110 transition-all duration-500">

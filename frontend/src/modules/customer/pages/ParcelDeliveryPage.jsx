@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   MapPin,
@@ -17,6 +18,7 @@ import {
   FileText,
   AlertTriangle,
   ChevronLeft,
+  ChevronDown,
   Building2,
   CalendarDays,
 } from 'lucide-react';
@@ -31,17 +33,17 @@ import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from '@react-go
 
 const getCustomerToken = createSocketTokenReader(STORAGE_KEYS.AUTH_CUSTOMER);
 
-const COURIER_COMPANIES = [
-  'Blue Dart',
-  'DTDC',
-  'Delhivery',
-  'India Post',
-  'Ekart',
-  'Ecom Express',
-  'XpressBees',
-  'FedEx',
-  'DHL',
-  'Shadowfax',
+const FALLBACK_COURIER_COMPANIES = [
+  { id: '', name: 'Blue Dart', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'DTDC', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'Delhivery', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'India Post', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'Ekart', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'Ecom Express', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'XpressBees', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'FedEx', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'DHL', platformCharge: 0, companyCharge: 0 },
+  { id: '', name: 'Shadowfax', platformCharge: 0, companyCharge: 0 },
 ];
 
 const DESTINATION_CITIES = [
@@ -89,6 +91,282 @@ const todayDateInputValue = () => addDaysToDateInput(0);
 
 const getCityCoords = (cityName) =>
   DESTINATION_CITIES.find((c) => c.name === cityName) || null;
+
+const formatInr = (value) => `₹${Number(value || 0).toFixed(0)}`;
+
+/** Keeps dropdown menus inside the viewport (flips up + scrolls). */
+const useInScreenMenu = (open, onClose, itemCount = 1, estimatedItemHeight = 48) => {
+  const rootRef = useRef(null);
+  const listRef = useRef(null);
+  const [menuStyle, setMenuStyle] = useState(null);
+
+  const updatePosition = useCallback(() => {
+    if (!open || !rootRef.current) return;
+    const rect = rootRef.current.getBoundingClientRect();
+    const gutter = 8;
+    const preferredHeight = Math.min(280, Math.max(160, itemCount * estimatedItemHeight + 8));
+    const spaceBelow = window.innerHeight - rect.bottom - gutter;
+    const spaceAbove = rect.top - gutter;
+    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(120, Math.min(preferredHeight, openUpward ? spaceAbove : spaceBelow));
+
+    setMenuStyle({
+      position: 'fixed',
+      left: Math.max(gutter, Math.min(rect.left, window.innerWidth - rect.width - gutter)),
+      width: rect.width,
+      maxHeight,
+      zIndex: 9999,
+      ...(openUpward
+        ? { bottom: window.innerHeight - rect.top + 6, top: 'auto' }
+        : { top: rect.bottom + 6, bottom: 'auto' }),
+    });
+  }, [open, itemCount, estimatedItemHeight]);
+
+  useEffect(() => {
+    if (!open) {
+      setMenuStyle(null);
+      return undefined;
+    }
+    updatePosition();
+    const onReposition = () => updatePosition();
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [open, updatePosition]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event) => {
+      const inRoot = rootRef.current?.contains(event.target);
+      const inList = listRef.current?.contains(event.target);
+      if (!inRoot && !inList) onClose();
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, onClose]);
+
+  return { rootRef, listRef, menuStyle };
+};
+
+const CourierCompanySelect = ({ companies, value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const { rootRef, listRef, menuStyle } = useInScreenMenu(
+    open,
+    close,
+    (companies?.length || 0) + 1,
+    56,
+  );
+
+  const selected = useMemo(
+    () =>
+      companies.find((c) => (c.id && c.id === value) || c.name === value) || null,
+    [companies, value],
+  );
+
+  const selectedValue = selected ? selected.id || selected.name : '';
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 z-[1] pointer-events-none" size={14} />
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full rounded-xl border border-slate-200 pl-9 pr-10 py-2.5 text-sm bg-white outline-none focus:border-primary focus:ring-1 focus:ring-primary text-left min-h-[44px]"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {selected ? (
+          <span className="flex items-center justify-between gap-2 pr-1">
+            <span className="font-semibold text-slate-800 truncate">{selected.name}</span>
+            <span className="flex items-center gap-1.5 shrink-0 text-[11px]">
+              {Number(selected.companyCharge) > 0 && (
+                <span className="text-slate-400 line-through decoration-slate-400">
+                  {formatInr(selected.companyCharge)}
+                </span>
+              )}
+              <span className="font-black text-primary">
+                Platform {formatInr(selected.platformCharge)}
+              </span>
+            </span>
+          </span>
+        ) : (
+          <span className="text-slate-400">Select courier company</span>
+        )}
+      </button>
+      <ChevronDown
+        size={16}
+        className={`absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none transition-transform ${
+          open ? 'rotate-180' : ''
+        }`}
+      />
+
+      {open &&
+        menuStyle &&
+        createPortal(
+          <div
+            ref={listRef}
+            role="listbox"
+            style={menuStyle}
+            className="overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white shadow-xl"
+          >
+            <button
+              type="button"
+              role="option"
+              aria-selected={!selectedValue}
+              onClick={() => {
+                onChange('');
+                setOpen(false);
+              }}
+              className="w-full px-3 py-2.5 text-left text-sm text-slate-400 hover:bg-slate-50 border-b border-slate-100"
+            >
+              Select courier company
+            </button>
+            {companies.map((company) => {
+              const optionValue = company.id || company.name;
+              const isSelected = optionValue === selectedValue;
+              const companyFee = Number(company.companyCharge) || 0;
+              const platformFee = Number(company.platformCharge) || 0;
+              return (
+                <button
+                  key={optionValue}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onChange(optionValue);
+                    setOpen(false);
+                  }}
+                  className={`w-full px-3 py-2.5 text-left transition-colors border-b border-slate-50 last:border-b-0 ${
+                    isSelected ? 'bg-primary/5' : 'hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span
+                      className={`text-sm font-semibold truncate ${
+                        isSelected ? 'text-primary' : 'text-slate-800'
+                      }`}
+                    >
+                      {company.name}
+                    </span>
+                    <span className="flex flex-col items-end gap-0.5 shrink-0">
+                      {companyFee > 0 && (
+                        <span className="text-[11px] text-slate-400 line-through decoration-slate-400">
+                          Courier {formatInr(companyFee)}
+                        </span>
+                      )}
+                      <span className="text-[11px] font-black text-primary">
+                        Platform {formatInr(platformFee)}
+                      </span>
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+            {companies.length === 0 && (
+              <p className="px-3 py-4 text-xs text-slate-400 text-center">
+                No courier companies available
+              </p>
+            )}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+};
+
+const DestinationCitySelect = ({ cities, value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const { rootRef, listRef, menuStyle } = useInScreenMenu(
+    open,
+    close,
+    (cities?.length || 0) + 1,
+    42,
+  );
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 z-[1] pointer-events-none" size={14} />
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full rounded-xl border border-slate-200 pl-9 pr-10 py-2.5 text-sm bg-white outline-none focus:border-primary focus:ring-1 focus:ring-primary text-left min-h-[44px]"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {value ? (
+          <span className="font-semibold text-slate-800">{value}</span>
+        ) : (
+          <span className="text-slate-400">Select city</span>
+        )}
+      </button>
+      <ChevronDown
+        size={16}
+        className={`absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none transition-transform ${
+          open ? 'rotate-180' : ''
+        }`}
+      />
+
+      {open &&
+        menuStyle &&
+        createPortal(
+          <div
+            ref={listRef}
+            role="listbox"
+            style={menuStyle}
+            className="overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white shadow-xl"
+          >
+            <button
+              type="button"
+              role="option"
+              aria-selected={!value}
+              onClick={() => {
+                onChange('');
+                setOpen(false);
+              }}
+              className="w-full px-3 py-2.5 text-left text-sm text-slate-400 hover:bg-slate-50 border-b border-slate-100"
+            >
+              Select city
+            </button>
+            {cities.map((city) => {
+              const isSelected = city.name === value;
+              return (
+                <button
+                  key={city.name}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onChange(city.name);
+                    setOpen(false);
+                  }}
+                  className={`w-full px-3 py-2.5 text-left text-sm font-semibold border-b border-slate-50 last:border-b-0 ${
+                    isSelected
+                      ? 'bg-primary text-white'
+                      : 'text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  {city.name}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+};
 
 const formatParcelStatusLabel = (status) => {
   if (status === 'SEARCHING') return 'Searching for rider';
@@ -238,7 +516,8 @@ const ParcelDeliveryPage = () => {
   const [weightUnit, setWeightUnit] = useState("kg"); // 'kg' | 'gm'
   const [description, setDescription] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('COD');
-  const [courierCompany, setCourierCompany] = useState('');
+  const [courierCompanies, setCourierCompanies] = useState(FALLBACK_COURIER_COMPANIES);
+  const [courierCompanyId, setCourierCompanyId] = useState('');
   const [destinationCity, setDestinationCity] = useState('');
   const [pickupWindow, setPickupWindow] = useState('today');
   const [preferredPickupDate, setPreferredPickupDate] = useState(todayDateInputValue());
@@ -247,6 +526,13 @@ const ParcelDeliveryPage = () => {
     () => (destinationCity ? getCityCoords(destinationCity) : null),
     [destinationCity],
   );
+
+  const selectedCourier = useMemo(
+    () => courierCompanies.find((c) => (c.id && c.id === courierCompanyId) || c.name === courierCompanyId) || null,
+    [courierCompanies, courierCompanyId],
+  );
+
+  const courierCompany = selectedCourier?.name || '';
 
   const selectedPickupWindow = useMemo(
     () => PICKUP_WINDOWS.find((w) => w.value === pickupWindow) || PICKUP_WINDOWS[0],
@@ -313,6 +599,16 @@ const ParcelDeliveryPage = () => {
       if (cfg.packageDescriptionPlaceholder) {
         setPackageDescriptionPlaceholder(cfg.packageDescriptionPlaceholder);
       }
+      if (Array.isArray(cfg.courierCompanies) && cfg.courierCompanies.length) {
+        setCourierCompanies(
+          cfg.courierCompanies.map((c) => ({
+            id: String(c.id || c._id || ''),
+            name: c.name,
+            platformCharge: Number(c.platformCharge) || 0,
+            companyCharge: Number(c.companyCharge) || 0,
+          })),
+        );
+      }
     } catch (error) {
       console.error("Failed to load parcel booking config", error);
     }
@@ -361,6 +657,8 @@ const ParcelDeliveryPage = () => {
             dropLat: selectedCity.lat,
             dropLng: selectedCity.lng,
             weight: weightKg,
+            courierCompanyId: selectedCourier?.id || undefined,
+            courierCompany: selectedCourier?.name || undefined,
           });
           if (res.data && res.data.success) {
             setFareEstimation(res.data.result);
@@ -377,7 +675,7 @@ const ParcelDeliveryPage = () => {
 
     const delayDebounce = setTimeout(calcFare, 500);
     return () => clearTimeout(delayDebounce);
-  }, [pickupDetails.lat, pickupDetails.lng, selectedCity?.lat, selectedCity?.lng, weightKg]);
+  }, [pickupDetails.lat, pickupDetails.lng, selectedCity?.lat, selectedCity?.lng, weightKg, selectedCourier?.id, selectedCourier?.name]);
 
   // Map Selection Confirmation
   const handleMapConfirm = (location) => {
@@ -410,7 +708,7 @@ const ParcelDeliveryPage = () => {
     if (!packageTypes.some((t) => t.value === packageType)) {
       return toast.error("Please select a valid package type.");
     }
-    if (!courierCompany) {
+    if (!selectedCourier) {
       return toast.error("Please select a courier company.");
     }
     if (!destinationCity || !selectedCity) {
@@ -449,7 +747,8 @@ const ParcelDeliveryPage = () => {
           weight: weightKg,
           description
         },
-        courierCompany,
+        courierCompany: selectedCourier.name,
+        courierCompanyId: selectedCourier.id || undefined,
         destinationCity,
         pickupWindow: selectedPickupWindow.value,
         pickupWindowDays:
@@ -463,7 +762,7 @@ const ParcelDeliveryPage = () => {
         const createdParcel = response.data.result;
         // Reset form
         setDescription('');
-        setCourierCompany('');
+        setCourierCompanyId('');
         setDestinationCity('');
         setPickupWindow('today');
         setPreferredPickupDate(todayDateInputValue());
@@ -660,56 +959,52 @@ const ParcelDeliveryPage = () => {
             </div>
 
             {/* Dropoff Details Card */}
-            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
+            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4 overflow-visible relative z-20">
               <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
                 <MapPin className="text-red-500" size={20} /> Dropoff Details
               </h2>
 
-              <div className="space-y-1">
+              <div className="space-y-1 relative z-30">
                 <label className="text-xs font-bold text-slate-500 uppercase">
                   Courier Company
                 </label>
-                <div className="relative">
-                  <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                  <select
-                    required
-                    value={courierCompany}
-                    onChange={(e) => setCourierCompany(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-primary focus:ring-1 focus:ring-primary appearance-none"
-                  >
-                    <option value="">Select courier company</option>
-                    {COURIER_COMPANIES.map((company) => (
-                      <option key={company} value={company}>
-                        {company}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <CourierCompanySelect
+                  companies={courierCompanies}
+                  value={courierCompanyId}
+                  onChange={setCourierCompanyId}
+                />
                 <p className="text-[10px] text-slate-400 font-medium">
-                  Which courier company should receive this parcel?
+                  {selectedCourier
+                    ? (
+                      <>
+                        {Number(selectedCourier.companyCharge) > 0 && (
+                          <>
+                            Courier{' '}
+                            <span className="line-through text-slate-400">
+                              {formatInr(selectedCourier.companyCharge)}
+                            </span>
+                            {' · '}
+                          </>
+                        )}
+                        Platform{' '}
+                        <span className="font-bold text-primary">
+                          {formatInr(selectedCourier.platformCharge)}
+                        </span>
+                      </>
+                    )
+                    : 'Which courier company should receive this parcel?'}
                 </p>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 relative z-20">
                 <label className="text-xs font-bold text-slate-500 uppercase">
                   Destination City
                 </label>
-                <div className="relative">
-                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                  <select
-                    required
-                    value={destinationCity}
-                    onChange={(e) => setDestinationCity(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-primary focus:ring-1 focus:ring-primary appearance-none"
-                  >
-                    <option value="">Select city</option>
-                    {DESTINATION_CITIES.map((city) => (
-                      <option key={city.name} value={city.name}>
-                        {city.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <DestinationCitySelect
+                  cities={DESTINATION_CITIES}
+                  value={destinationCity}
+                  onChange={setDestinationCity}
+                />
                 <p className="text-[10px] text-slate-400 font-medium">
                   Which city should this parcel go to?
                 </p>
@@ -963,6 +1258,28 @@ const ParcelDeliveryPage = () => {
                     <span>Weight Charge ({weightKg} kg)</span>
                     <span>₹{Number(fareEstimation.weightFare).toFixed(2)}</span>
                   </div>
+                  {Number(fareEstimation.courierCharge) > 0 && (
+                    <>
+                      {Number(fareEstimation.companyCharge) > 0 && (
+                        <div className="flex justify-between">
+                          <span>Courier Company Fee</span>
+                          <span>₹{Number(fareEstimation.companyCharge).toFixed(2)}</span>
+                        </div>
+                      )}
+                      {Number(fareEstimation.platformCharge) > 0 && (
+                        <div className="flex justify-between">
+                          <span>Platform Charge</span>
+                          <span>₹{Number(fareEstimation.platformCharge).toFixed(2)}</span>
+                        </div>
+                      )}
+                      {!Number(fareEstimation.companyCharge) && !Number(fareEstimation.platformCharge) && (
+                        <div className="flex justify-between">
+                          <span>Courier Platform ({courierCompany || 'Selected'})</span>
+                          <span>₹{Number(fareEstimation.courierCharge).toFixed(2)}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -975,7 +1292,7 @@ const ParcelDeliveryPage = () => {
 
               <button
                 type="submit"
-                disabled={loading || estimating || !pickupDetails.lat || !selectedCity || !courierCompany}
+                disabled={loading || estimating || !pickupDetails.lat || !selectedCity || !selectedCourier}
                 className="w-full bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-all"
               >
                 {loading ? 'Processing Book...' : 'Request Delivery'}

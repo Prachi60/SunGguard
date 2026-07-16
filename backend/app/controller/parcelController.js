@@ -1,5 +1,6 @@
 import Parcel from "../models/parcel.js";
 import ParcelConfig from "../models/parcelConfig.js";
+import CourierCompany from "../models/courierCompany.js";
 import Delivery from "../models/delivery.js";
 import User from "../models/customer.js";
 import Admin from "../models/admin.js";
@@ -95,7 +96,7 @@ async function sendParcelNotification(userId, role, title, body, eventType = "al
 
 export const calculateFare = async (req, res) => {
   try {
-    const { pickupLat, pickupLng, dropLat, dropLng, weight } = req.body;
+    const { pickupLat, pickupLng, dropLat, dropLng, weight, courierCompany, courierCompanyId } = req.body;
 
     if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
       return handleResponse(res, 400, "Pickup and drop locations are required");
@@ -127,14 +128,32 @@ export const calculateFare = async (req, res) => {
       Math.round((distanceKm * perKmCharge + Number.EPSILON) * 100) / 100;
     const weightFare =
       Math.round((pkgWeight * weightCharge + Number.EPSILON) * 100) / 100;
+
+    let courierCharge = 0;
+    let platformCharge = 0;
+    let companyCharge = 0;
+    const courierKey = courierCompanyId || courierCompany;
+    if (courierKey) {
+      const courier = await CourierCompany.findActiveByNameOrId(courierKey);
+      if (courier) {
+        platformCharge = Math.round((Number(courier.platformCharge) || 0) * 100) / 100;
+        companyCharge = Math.round((Number(courier.companyCharge) || 0) * 100) / 100;
+        courierCharge =
+          Math.round((platformCharge + companyCharge + Number.EPSILON) * 100) / 100;
+      }
+    }
+
     const fare =
-      Math.round((baseFare + distanceFare + weightFare + Number.EPSILON) * 100) / 100;
+      Math.round((baseFare + distanceFare + weightFare + courierCharge + Number.EPSILON) * 100) / 100;
 
     return handleResponse(res, 200, "Fare calculated successfully", {
       distance: distanceKm,
       baseFare,
       distanceFare,
       weightFare,
+      platformCharge,
+      companyCharge,
+      courierCharge,
       fare,
     });
   } catch (error) {
@@ -150,6 +169,7 @@ export const createParcel = async (req, res) => {
       packageDetails,
       paymentMethod,
       courierCompany,
+      courierCompanyId,
       destinationCity,
       preferredPickupDate,
       pickupWindow,
@@ -160,11 +180,13 @@ export const createParcel = async (req, res) => {
       return handleResponse(res, 400, "Missing required details");
     }
 
-    const courier = String(courierCompany || "").trim();
-    const city = String(destinationCity || "").trim();
-    if (!courier) {
-      return handleResponse(res, 400, "Please select a courier company");
+    const courierKey = courierCompanyId || courierCompany;
+    const courierDoc = await CourierCompany.findActiveByNameOrId(courierKey);
+    if (!courierDoc) {
+      return handleResponse(res, 400, "Please select a valid courier company");
     }
+    const courier = courierDoc.name;
+    const city = String(destinationCity || "").trim();
     if (!city) {
       return handleResponse(res, 400, "Please select destination city");
     }
@@ -254,8 +276,14 @@ export const createParcel = async (req, res) => {
       Math.round((distanceKm * (Number(config.perKmCharge) || 0) + Number.EPSILON) * 100) / 100;
     const weightFare =
       Math.round((weight * (Number(config.weightCharge) || 0) + Number.EPSILON) * 100) / 100;
+    const platformCharge =
+      Math.round((Number(courierDoc.platformCharge) || 0) * 100) / 100;
+    const companyCharge =
+      Math.round((Number(courierDoc.companyCharge) || 0) * 100) / 100;
+    const courierCharge =
+      Math.round((platformCharge + companyCharge + Number.EPSILON) * 100) / 100;
     const fare =
-      Math.round((baseFare + distanceFare + weightFare + Number.EPSILON) * 100) / 100;
+      Math.round((baseFare + distanceFare + weightFare + courierCharge + Number.EPSILON) * 100) / 100;
 
     // Generate 6-digit OTP code
     const otp = generateParcelOtp();
@@ -266,6 +294,7 @@ export const createParcel = async (req, res) => {
       dropAddress,
       packageDetails,
       courierCompany: courier,
+      courierCompanyId: courierDoc._id,
       destinationCity: city,
       preferredPickupDate: pickupDate,
       pickupWindow: windowValue,
@@ -277,6 +306,9 @@ export const createParcel = async (req, res) => {
         baseFare,
         distanceFare,
         weightFare,
+        platformCharge,
+        companyCharge,
+        courierCharge,
       },
       paymentStatus: paymentMethod === "COD" ? "PENDING" : "PAID", // Card/UPI/Wallet paid immediately
       paymentMethod,
@@ -507,7 +539,16 @@ export const adminGetPricingConfig = async (req, res) => {
 export const getBookingConfig = async (req, res) => {
   try {
     const config = await ParcelConfig.getPublicBookingConfig();
-    return handleResponse(res, 200, "Parcel booking config retrieved", config);
+    const courierCompanies = await CourierCompany.listActiveForBooking();
+    return handleResponse(res, 200, "Parcel booking config retrieved", {
+      ...config,
+      courierCompanies: (courierCompanies || []).map((c) => ({
+        id: String(c._id),
+        name: c.name,
+        platformCharge: Math.round((Number(c.platformCharge) || 0) * 100) / 100,
+        companyCharge: Math.round((Number(c.companyCharge) || 0) * 100) / 100,
+      })),
+    });
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }

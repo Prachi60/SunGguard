@@ -14,7 +14,11 @@ import {
   CheckCircle2,
   XCircle,
   Save,
-  ArrowRight
+  ArrowRight,
+  Building2,
+  Plus,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { parcelApi } from "../../customer/services/parcelApi";
@@ -24,14 +28,34 @@ import { STORAGE_KEYS } from "@core/utils/storage";
 
 const AdminParcelDashboard = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState("all"); // 'all', 'active', 'pricing', 'reports'
+  const [activeTab, setActiveTab] = useState("all"); // 'all', 'active', 'pricing', 'couriers', 'reports'
   const [loading, setLoading] = useState(false);
   const [parcels, setParcels] = useState([]);
   const [riders, setRiders] = useState([]);
   const [selectedParcel, setSelectedParcel] = useState(null);
+  const [couriers, setCouriers] = useState([]);
+  const [addCourierForm, setAddCourierForm] = useState({
+    name: "",
+    platformCharge: "0",
+    companyCharge: "0",
+    sortOrder: "0",
+    isActive: true,
+  });
+  const [editCourierForm, setEditCourierForm] = useState({
+    name: "",
+    platformCharge: "0",
+    companyCharge: "0",
+    sortOrder: "0",
+    isActive: true,
+  });
+  const [courierSaving, setCourierSaving] = useState(false);
+  const [courierEditModalOpen, setCourierEditModalOpen] = useState(false);
+  const [editingCourierId, setEditingCourierId] = useState(null);
+  const [courierToDelete, setCourierToDelete] = useState(null);
+  const [courierDeleting, setCourierDeleting] = useState(false);
 
   useEffect(() => {
-    if (selectedParcel) {
+    if (selectedParcel || courierEditModalOpen || courierToDelete) {
       document.body.style.overflow = "hidden";
       document.documentElement.style.overflow = "hidden";
     } else {
@@ -42,7 +66,7 @@ const AdminParcelDashboard = () => {
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
     };
-  }, [selectedParcel]);
+  }, [selectedParcel, courierEditModalOpen, courierToDelete]);
 
   // Pricing Config state
   const [pricing, setPricing] = useState({
@@ -90,6 +114,12 @@ const AdminParcelDashboard = () => {
       const ridersRes = await parcelApi.adminGetRiders();
       if (ridersRes.data && ridersRes.data.success) {
         setRiders(ridersRes.data.results || ridersRes.data.result || []);
+      }
+
+      // Fetch Courier Companies
+      const couriersRes = await parcelApi.adminGetCouriers();
+      if (couriersRes.data && couriersRes.data.success) {
+        setCouriers(couriersRes.data.results || couriersRes.data.result || []);
       }
 
       // Fetch Pricing
@@ -251,6 +281,139 @@ const AdminParcelDashboard = () => {
     }
   };
 
+  const emptyCourierForm = {
+    name: "",
+    platformCharge: "0",
+    companyCharge: "0",
+    sortOrder: "0",
+    isActive: true,
+  };
+
+  const closeCourierEditModal = () => {
+    setCourierEditModalOpen(false);
+    setEditingCourierId(null);
+    setEditCourierForm(emptyCourierForm);
+  };
+
+  const startEditCourier = (company) => {
+    setEditingCourierId(company._id);
+    setEditCourierForm({
+      name: company.name || "",
+      platformCharge: String(company.platformCharge ?? 0),
+      companyCharge: String(company.companyCharge ?? 0),
+      sortOrder: String(company.sortOrder ?? 0),
+      isActive: company.isActive !== false,
+    });
+    setCourierEditModalOpen(true);
+  };
+
+  const handleAddCourier = async (e) => {
+    e.preventDefault();
+    const name = String(addCourierForm.name || "").trim();
+    if (!name) {
+      return toast.error("Courier company name is required");
+    }
+
+    setCourierSaving(true);
+    try {
+      const payload = {
+        name,
+        platformCharge: Number(addCourierForm.platformCharge) || 0,
+        companyCharge: Number(addCourierForm.companyCharge) || 0,
+        sortOrder: Number(addCourierForm.sortOrder) || 0,
+        isActive: addCourierForm.isActive !== false,
+      };
+      const res = await parcelApi.adminCreateCourier(payload);
+      if (res.data?.success) {
+        toast.success("Courier company added");
+        setAddCourierForm(emptyCourierForm);
+        fetchData(true);
+      } else {
+        toast.error(res.data?.message || "Failed to save courier company");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to save courier company");
+    } finally {
+      setCourierSaving(false);
+    }
+  };
+
+  const handleUpdateCourier = async (e) => {
+    e.preventDefault();
+    const name = String(editCourierForm.name || "").trim();
+    if (!name) {
+      return toast.error("Courier company name is required");
+    }
+    if (!editingCourierId) return;
+
+    setCourierSaving(true);
+    try {
+      const payload = {
+        name,
+        platformCharge: Number(editCourierForm.platformCharge) || 0,
+        companyCharge: Number(editCourierForm.companyCharge) || 0,
+        sortOrder: Number(editCourierForm.sortOrder) || 0,
+        isActive: editCourierForm.isActive !== false,
+      };
+      const res = await parcelApi.adminUpdateCourier(editingCourierId, payload);
+      if (res.data?.success) {
+        toast.success("Courier company updated");
+        closeCourierEditModal();
+        fetchData(true);
+      } else {
+        toast.error(res.data?.message || "Failed to update courier company");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to update courier company");
+    } finally {
+      setCourierSaving(false);
+    }
+  };
+
+  const confirmDeleteCourier = async () => {
+    const courierId = String(courierToDelete?._id || courierToDelete?.id || "").trim();
+    if (!courierId) {
+      toast.error("Could not delete: courier id missing");
+      return;
+    }
+
+    setCourierDeleting(true);
+    try {
+      const res = await parcelApi.adminDeleteCourier(courierId);
+      if (res.data?.success) {
+        toast.success("Courier company deleted");
+        setCouriers((prev) =>
+          prev.filter((c) => String(c._id || c.id) !== courierId),
+        );
+        if (String(editingCourierId) === courierId) closeCourierEditModal();
+        setCourierToDelete(null);
+        fetchData(true);
+      } else {
+        toast.error(res.data?.message || "Failed to delete");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to delete courier company");
+    } finally {
+      setCourierDeleting(false);
+    }
+  };
+
+  const handleToggleCourierActive = async (company) => {
+    try {
+      const res = await parcelApi.adminUpdateCourier(company._id, {
+        isActive: !company.isActive,
+      });
+      if (res.data?.success) {
+        toast.success(company.isActive ? "Courier deactivated" : "Courier activated");
+        fetchData(true);
+      } else {
+        toast.error(res.data?.message || "Failed to update status");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to update status");
+    }
+  };
+
   const getActiveParcels = () => {
     const activeStatuses = ["SEARCHING", "REQUESTED", "ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"];
     return parcels.filter(p => activeStatuses.includes(p.status));
@@ -278,17 +441,18 @@ const AdminParcelDashboard = () => {
         </div>
 
         {/* Tab Controls */}
-        <div className="flex bg-slate-100 p-1 rounded-xl">
+        <div className="flex flex-wrap bg-slate-100 p-1 rounded-xl gap-0.5">
           {[
             { id: "all", label: "All Bookings", icon: ClipboardList },
             { id: "active", label: "Active Deliveries", icon: Activity },
             { id: "pricing", label: "Parcel Settings", icon: Settings },
+            { id: "couriers", label: "Couriers", icon: Building2 },
             { id: "reports", label: "Revenue Reports", icon: TrendingUp },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-xs transition-all ${
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg font-bold text-xs transition-all ${
                 activeTab === tab.id
                   ? "bg-white text-slate-800 shadow-sm"
                   : "text-slate-500 hover:text-slate-800"
@@ -848,6 +1012,194 @@ const AdminParcelDashboard = () => {
             </div>
           )}
 
+          {/* TAB: COURIER COMPANIES CRUD */}
+          {activeTab === "couriers" && (
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+              <div className="lg:col-span-2">
+                <form
+                  onSubmit={handleAddCourier}
+                  className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden"
+                >
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <Plus className="text-primary" size={18} />
+                      Add Courier Company
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Set platform charge customers pay when they choose this courier.
+                    </p>
+                  </div>
+
+                  <div className="p-5 space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Company Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={addCourierForm.name}
+                        onChange={(e) => setAddCourierForm((f) => ({ ...f, name: e.target.value }))}
+                        placeholder="e.g. Blue Dart"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Platform Charge (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={addCourierForm.platformCharge}
+                        onChange={(e) =>
+                          setAddCourierForm((f) => ({ ...f, platformCharge: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Extra platform fee added to customer fare when this courier is selected.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Courier Company Charge (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={addCourierForm.companyCharge}
+                        onChange={(e) =>
+                          setAddCourierForm((f) => ({ ...f, companyCharge: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        How much this courier company itself charges.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Sort Order</label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={addCourierForm.sortOrder}
+                        onChange={(e) => setAddCourierForm((f) => ({ ...f, sortOrder: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
+
+                    <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={addCourierForm.isActive}
+                        onChange={(e) =>
+                          setAddCourierForm((f) => ({ ...f, isActive: e.target.checked }))
+                        }
+                        className="accent-primary h-4 w-4"
+                      />
+                      Active (shown on customer booking form)
+                    </label>
+
+                    <button
+                      type="submit"
+                      disabled={courierSaving}
+                      className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Save size={16} />
+                      {courierSaving ? "Saving..." : "Add Courier"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="lg:col-span-3 bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+                <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <Building2 className="text-primary" size={18} /> Courier Companies
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {couriers.length} companies · edit & delete open in modal
+                    </p>
+                  </div>
+                </div>
+
+                <div className="divide-y divide-slate-100">
+                  {couriers.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-10 font-medium">
+                      No courier companies yet. Add one on the left.
+                    </p>
+                  ) : (
+                    couriers.map((company) => (
+                      <div
+                        key={company._id}
+                        className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/60"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-black text-slate-800">{company.name}</span>
+                            <span
+                              className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                company.isActive
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
+                              {company.isActive ? "Active" : "Inactive"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 font-medium mt-1">
+                            Platform:{" "}
+                            <span className="font-black text-slate-800">
+                              ₹{Number(company.platformCharge || 0).toFixed(2)}
+                            </span>
+                            {" · "}Courier fee:{" "}
+                            <span className="font-black text-slate-800">
+                              ₹{Number(company.companyCharge || 0).toFixed(2)}
+                            </span>
+                            {" · "}Sort: {company.sortOrder ?? 0}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCourierActive(company)}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-600 hover:bg-white"
+                          >
+                            {company.isActive ? "Deactivate" : "Activate"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startEditCourier(company)}
+                            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-primary hover:border-primary/30"
+                            title="Edit"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCourierToDelete(company)}
+                            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200"
+                            title="Delete"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB 4: REVENUE REPORTS */}
           {activeTab === "reports" && (
             <div className="space-y-6">
@@ -1083,6 +1435,188 @@ const AdminParcelDashboard = () => {
                 className="w-full py-2.5 bg-white border border-slate-200 hover:bg-slate-50 font-bold text-xs text-slate-700 rounded-xl transition-all uppercase tracking-wider"
               >
                 Close Details
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Courier Modal */}
+      {courierEditModalOpen && (
+        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 z-0"
+            onClick={closeCourierEditModal}
+            aria-hidden="true"
+          />
+          <div
+            className="relative z-10 bg-white rounded-3xl border border-slate-100 shadow-xl max-w-md w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-slate-100 flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                  <Pencil className="text-primary" size={18} />
+                  Edit Courier Company
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Update name, platform charge, and visibility.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeCourierEditModal}
+                className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <XCircle size={22} />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateCourier} className="p-5 space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">Company Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editCourierForm.name}
+                  onChange={(e) => setEditCourierForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Blue Dart"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Platform Charge (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  required
+                  value={editCourierForm.platformCharge}
+                  onChange={(e) =>
+                    setEditCourierForm((f) => ({ ...f, platformCharge: e.target.value }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                />
+                <p className="text-[10px] text-slate-400 font-medium">
+                  Extra platform fee added to customer fare when this courier is selected.
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Courier Company Charge (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  required
+                  value={editCourierForm.companyCharge}
+                  onChange={(e) =>
+                    setEditCourierForm((f) => ({ ...f, companyCharge: e.target.value }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                />
+                <p className="text-[10px] text-slate-400 font-medium">
+                  How much this courier company itself charges.
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">Sort Order</label>
+                <input
+                  type="number"
+                  step="1"
+                  value={editCourierForm.sortOrder}
+                  onChange={(e) =>
+                    setEditCourierForm((f) => ({ ...f, sortOrder: e.target.value }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editCourierForm.isActive}
+                  onChange={(e) =>
+                    setEditCourierForm((f) => ({ ...f, isActive: e.target.checked }))
+                  }
+                  className="accent-primary h-4 w-4"
+                />
+                Active (shown on customer booking form)
+              </label>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeCourierEditModal}
+                  className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={courierSaving}
+                  className="flex-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all"
+                >
+                  <Save size={16} />
+                  {courierSaving ? "Saving..." : "Update"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Courier Confirm Modal */}
+      {courierToDelete && (
+        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 z-0"
+            onClick={() => !courierDeleting && setCourierToDelete(null)}
+            aria-hidden="true"
+          />
+          <div
+            className="relative z-10 bg-white rounded-3xl border border-slate-100 shadow-xl max-w-sm w-full overflow-hidden p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 size={18} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-800">Delete Courier?</h3>
+                <p className="text-sm text-slate-500 font-medium mt-1">
+                  Remove <span className="font-black text-slate-800">{courierToDelete.name}</span> from
+                  the booking list. This cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                disabled={courierDeleting}
+                onClick={() => setCourierToDelete(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={courierDeleting}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  confirmDeleteCourier();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm disabled:opacity-50"
+              >
+                {courierDeleting ? "Deleting..." : "Delete"}
               </button>
             </div>
           </div>

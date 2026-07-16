@@ -535,15 +535,17 @@ const DeliveryAuth = () => {
           {/* Header with Lottie */}
           <div className="bg-gradient-to-br from-brand-50 to-purple-50 p-8 flex flex-col items-center relative">
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
-              <div className="w-14 h-14 rounded-2xl bg-white/85 backdrop-blur-sm border border-brand-100 shadow-sm flex items-center justify-center overflow-hidden">
+              <div className="w-14 h-14 rounded-2xl bg-white/85 backdrop-blur-sm border border-brand-100 shadow-sm overflow-hidden">
                 {logoUrl ? (
                   <img
                     src={logoUrl}
                     alt={`${appName} logo`}
-                    className="w-10 h-10 object-contain"
+                    className="h-full w-full object-cover"
                   />
                 ) : (
-                  <ShieldCheck className="w-5 h-5 text-brand-600" />
+                  <div className="h-full w-full flex items-center justify-center">
+                    <ShieldCheck className="w-5 h-5 text-brand-600" />
+                  </div>
                 )}
               </div>
             </div>

@@ -23,6 +23,12 @@ import {
   riderCompleteDelivery,
   riderGetEarnings
 } from "../controller/parcelController.js";
+import {
+  adminListCourierCompanies,
+  adminCreateCourierCompany,
+  adminUpdateCourierCompany,
+  adminDeleteCourierCompany,
+} from "../controller/courierCompanyController.js";
 
 const router = express.Router();
 
@@ -52,6 +58,30 @@ router.post(
   adminResetAllParcelData,
 );
 router.get("/admin/riders", verifyToken, allowRoles("admin", "parcel_admin"), adminGetRiders);
+router.get(
+  "/admin/couriers",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminListCourierCompanies,
+);
+router.post(
+  "/admin/couriers",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminCreateCourierCompany,
+);
+router.put(
+  "/admin/couriers/:id",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminUpdateCourierCompany,
+);
+router.delete(
+  "/admin/couriers/:id",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminDeleteCourierCompany,
+);
 
 /* ==========================================================================
    DELIVERY PARTNER API ROUTES

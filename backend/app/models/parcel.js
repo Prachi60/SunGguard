@@ -101,11 +101,19 @@ const parcelSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-    /** Snapshot used for rider payout (base + distance only; weight excluded). */
+    /** Snapshot used for rider payout (base + distance only; weight/courier excluded). */
     fareBreakdown: {
       baseFare: { type: Number, default: 0 },
       distanceFare: { type: Number, default: 0 },
       weightFare: { type: Number, default: 0 },
+      courierCharge: { type: Number, default: 0 },
+      platformCharge: { type: Number, default: 0 },
+      companyCharge: { type: Number, default: 0 },
+    },
+    courierCompanyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CourierCompany",
+      default: null,
     },
     paymentStatus: {
       type: String,

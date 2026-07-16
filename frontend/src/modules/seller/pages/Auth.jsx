@@ -479,16 +479,18 @@ const Auth = () => {
           className="w-full md:w-[55%] min-h-0 p-8 pt-12 md:p-12 md:pt-16 flex flex-col justify-center bg-white overflow-y-auto overscroll-contain touch-pan-y custom-scrollbar relative"
           onWheelCapture={handlePanelWheel}
           style={{ WebkitOverflowScrolling: "touch" }}>
-          <div className="hidden md:flex absolute top-8 right-8 z-20">
-            <div className="w-20 h-20 rounded-2xl bg-slate-50 border border-slate-200 shadow-sm flex items-center justify-center overflow-hidden">
+          <div className="absolute top-8 right-8 z-20">
+            <div className="w-20 h-20 rounded-2xl bg-slate-50 border border-slate-200 shadow-sm overflow-hidden">
               {logoUrl ? (
                 <img
                   src={logoUrl}
                   alt={`${appName} logo`}
-                  className="w-14 h-14 object-contain"
+                  className="h-full w-full object-cover"
                 />
               ) : (
-                <Store size={30} className="text-slate-700" />
+                <div className="h-full w-full flex items-center justify-center">
+                  <Store size={30} className="text-slate-700" />
+                </div>
               )}
             </div>
           </div>

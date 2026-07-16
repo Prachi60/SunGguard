@@ -19,6 +19,10 @@ export const parcelApi = {
   adminGetReports: () => axiosInstance.get("/parcel/admin/reports"),
   adminGetActiveDeliveries: () => axiosInstance.get("/parcel/admin/active"),
   adminGetRiders: () => axiosInstance.get("/parcel/admin/riders"),
+  adminGetCouriers: () => axiosInstance.get("/parcel/admin/couriers"),
+  adminCreateCourier: (data) => axiosInstance.post("/parcel/admin/couriers", data),
+  adminUpdateCourier: (id, data) => axiosInstance.put(`/parcel/admin/couriers/${id}`, data),
+  adminDeleteCourier: (id) => axiosInstance.delete(`/parcel/admin/couriers/${id}`),
 
   // Rider/Delivery Partner APIs
   riderGetAssigned: (options = {}) =>

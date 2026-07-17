@@ -163,7 +163,7 @@ const ProfilePage = () => {
                                 icon={History}
                                 label="Parcel History"
                                 sub="Track parcel deliveries & past requests"
-                                path="/parcel?tab=history"
+                                path="/profile/parcel-history"
                                 color="#0ea5e9"
                                 bg="rgba(14,165,233,0.10)"
                             />

@@ -1,21 +1,15 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   MapPin,
   Package,
   ArrowRight,
-  TrendingUp,
   CreditCard,
-  History,
   Truck,
-  ShieldCheck,
-  Search,
-  CheckCircle2,
   Clock,
   User,
   Phone,
-  FileText,
   AlertTriangle,
   ChevronLeft,
   ChevronDown,
@@ -26,12 +20,6 @@ import { toast } from 'sonner';
 import { parcelApi } from '../services/parcelApi';
 import MapPicker from '../../../shared/components/MapPicker';
 import { useAuth } from '@core/context/AuthContext';
-import { getOrderSocket, onParcelStatusUpdate } from '@/core/services/orderSocket';
-import { createSocketTokenReader } from '@core/utils/authStorage';
-import { STORAGE_KEYS } from '@core/utils/storage';
-import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from '@react-google-maps/api';
-
-const getCustomerToken = createSocketTokenReader(STORAGE_KEYS.AUTH_CUSTOMER);
 
 const FALLBACK_COURIER_COMPANIES = [
   { id: '', name: 'Blue Dart', platformCharge: 0, companyCharge: 0 },
@@ -368,136 +356,43 @@ const DestinationCitySelect = ({ cities, value, onChange }) => {
   );
 };
 
-const formatParcelStatusLabel = (status) => {
-  if (status === 'SEARCHING') return 'Searching for rider';
-  if (status === 'REQUESTED') return 'Waiting for rider';
-  return status;
-};
-
-const libraries = ["places"];
-
-const LiveTrackingMap = ({ pickupAddress, dropAddress, deliveryPartner }) => {
-  const { isLoaded } = useJsApiLoader({
-    id: "google-map-script",
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
-    libraries,
-  });
-
-  const [directions, setDirections] = useState(null);
-
-  useEffect(() => {
-    if (!isLoaded || !window.google) return;
-
-    const directionsService = new window.google.maps.DirectionsService();
-    directionsService.route(
-      {
-        origin: { lat: Number(pickupAddress.lat), lng: Number(pickupAddress.lng) },
-        destination: { lat: Number(dropAddress.lat), lng: Number(dropAddress.lng) },
-        travelMode: window.google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === window.google.maps.DirectionsStatus.OK) {
-          setDirections(result);
-        } else {
-          console.error(`Directions request failed: ${status}`);
-        }
-      }
-    );
-  }, [isLoaded, pickupAddress.lat, pickupAddress.lng, dropAddress.lat, dropAddress.lng]);
-
-  if (!isLoaded) {
-    return (
-      <div className="h-64 md:h-80 w-full bg-slate-100 rounded-3xl flex items-center justify-center animate-pulse">
-        <span className="text-xs text-slate-400 font-bold">Loading Live Map...</span>
-      </div>
-    );
-  }
-
-  const mapOptions = {
-    disableDefaultUI: true,
-    zoomControl: true,
-    streetViewControl: false,
-    mapTypeControl: false,
-    fullscreenControl: false,
-  };
-
-  const center = {
-    lat: (Number(pickupAddress.lat) + Number(dropAddress.lat)) / 2,
-    lng: (Number(pickupAddress.lng) + Number(dropAddress.lng)) / 2,
-  };
-
-  const riderCoordinates = deliveryPartner?.location?.coordinates;
-  const riderPos =
-    Array.isArray(riderCoordinates) && riderCoordinates.length === 2
-      ? { lat: Number(riderCoordinates[1]), lng: Number(riderCoordinates[0]) }
-      : null;
-
-  return (
-    <div className="rounded-3xl overflow-hidden border border-slate-100 shadow-md relative h-64 md:h-80 w-full z-10">
-      <GoogleMap
-        mapContainerStyle={{ width: "100%", height: "100%" }}
-        center={center}
-        zoom={12}
-        options={mapOptions}
-      >
-        {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true }} />}
-        
-        <Marker
-          position={{ lat: Number(pickupAddress.lat), lng: Number(pickupAddress.lng) }}
-          label={{
-            text: "P",
-            color: "white",
-            fontWeight: "black",
-          }}
-          title={`Pickup: ${pickupAddress.fullAddress}`}
-        />
-
-        <Marker
-          position={{ lat: Number(dropAddress.lat), lng: Number(dropAddress.lng) }}
-          label={{
-            text: "D",
-            color: "white",
-            fontWeight: "black",
-          }}
-          title={`Dropoff: ${dropAddress.fullAddress}`}
-        />
-
-        {riderPos && (
-          <Marker
-            position={riderPos}
-            icon={{
-              path: window.google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: "#3b82f6",
-              fillOpacity: 1,
-              strokeColor: "#ffffff",
-              strokeWeight: 2,
-            }}
-            title={`Rider: ${deliveryPartner.name}`}
-          />
-        )}
-      </GoogleMap>
-    </div>
-  );
-};
-
 const ParcelDeliveryPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = searchParams.get("tab") === "history" ? "history" : "book";
-  const [activeTab, setActiveTab] = useState(initialTab); // 'book' or 'history'
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState([]);
-  
+
   // Form State
   const [pickupDetails, setPickupDetails] = useState({
     name: user?.name || '',
     phone: user?.phone || '',
+    address: '',
+    landmark: '',
+    city: '',
+    state: '',
+    pincode: '',
     fullAddress: '',
     lat: null,
     lng: null
   });
+
+  const composePickupFullAddress = (details) =>
+    [
+      details.address?.trim(),
+      details.landmark?.trim() ? `Near ${details.landmark.trim()}` : '',
+      details.city?.trim(),
+      details.state?.trim(),
+      details.pincode?.trim(),
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+  const updatePickupField = (field, value) => {
+    setPickupDetails((prev) => {
+      const next = { ...prev, [field]: value };
+      next.fullAddress = composePickupFullAddress(next);
+      return next;
+    });
+  };
 
   const [packageTypes, setPackageTypes] = useState([
     { value: "document", label: "Document / Paper" },
@@ -566,22 +461,6 @@ const ParcelDeliveryPage = () => {
 
   // Map Selection states
   const [mapPickerTarget, setMapPickerTarget] = useState(null); // 'pickup' only
-  
-  // Tracking state
-  const [trackingParcel, setTrackingParcel] = useState(null);
-  const [trackingLoading, setTrackingLoading] = useState(false);
-
-  // Fetch history on load
-  const fetchHistory = useCallback(async () => {
-    try {
-      const response = await parcelApi.getHistory();
-      if (response.data && response.data.success) {
-        setHistory(response.data.results || response.data.result || []);
-      }
-    } catch (error) {
-      console.error("Failed to load history", error);
-    }
-  }, []);
 
   const fetchBookingConfig = useCallback(async () => {
     try {
@@ -615,29 +494,8 @@ const ParcelDeliveryPage = () => {
   }, []);
 
   useEffect(() => {
-    fetchHistory();
     fetchBookingConfig();
-  }, [fetchHistory, fetchBookingConfig]);
-
-  useEffect(() => {
-    const tab = searchParams.get("tab") === "history" ? "history" : "book";
-    setActiveTab(tab);
-    if (tab === "history") {
-      setTrackingParcel(null);
-      fetchHistory();
-    }
-  }, [searchParams, fetchHistory]);
-
-  const switchTab = (tab) => {
-    setActiveTab(tab);
-    setTrackingParcel(null);
-    if (tab === "history") {
-      fetchHistory();
-      setSearchParams({ tab: "history" }, { replace: true });
-    } else {
-      setSearchParams({}, { replace: true });
-    }
-  };
+  }, [fetchBookingConfig]);
 
   // Handle Fare Calculation when locations or weight change
   useEffect(() => {
@@ -680,12 +538,23 @@ const ParcelDeliveryPage = () => {
   // Map Selection Confirmation
   const handleMapConfirm = (location) => {
     if (mapPickerTarget === 'pickup') {
-      setPickupDetails(prev => ({
-        ...prev,
-        fullAddress: location.address || '',
-        lat: location.lat,
-        lng: location.lng
-      }));
+      setPickupDetails((prev) => {
+        const next = {
+          ...prev,
+          address: location.locality || prev.address || location.address || '',
+          city: location.city || prev.city || '',
+          state: location.state || prev.state || '',
+          pincode: location.pincode || prev.pincode || '',
+          lat: location.lat,
+          lng: location.lng,
+        };
+        // If street line is empty, fall back to full formatted address from map
+        if (!next.address?.trim() && location.address) {
+          next.address = location.address;
+        }
+        next.fullAddress = composePickupFullAddress(next) || location.address || '';
+        return next;
+      });
       toast.success("Pickup location updated!");
     }
     setMapPickerTarget(null);
@@ -694,8 +563,21 @@ const ParcelDeliveryPage = () => {
   // Create Parcel request
   const handlePlaceOrder = async (e) => {
     e.preventDefault();
-    if (!pickupDetails.fullAddress || !pickupDetails.lat || !pickupDetails.lng) {
-      return toast.error("Please select a valid Pickup address.");
+    const composedAddress = composePickupFullAddress(pickupDetails);
+    if (!pickupDetails.address?.trim()) {
+      return toast.error("Please enter house / street address.");
+    }
+    if (!pickupDetails.city?.trim()) {
+      return toast.error("Please enter city.");
+    }
+    if (!pickupDetails.state?.trim()) {
+      return toast.error("Please enter state.");
+    }
+    if (!pickupDetails.pincode?.trim()) {
+      return toast.error("Please enter pincode.");
+    }
+    if (!pickupDetails.lat || !pickupDetails.lng) {
+      return toast.error("Please select pickup location on the map.");
     }
     if (!pickupDetails.name || !pickupDetails.phone) {
       return toast.error("Please enter sender details.");
@@ -740,7 +622,13 @@ const ParcelDeliveryPage = () => {
     setLoading(true);
     try {
       const response = await parcelApi.createParcel({
-        pickupAddress: pickupDetails,
+        pickupAddress: {
+          name: pickupDetails.name,
+          phone: pickupDetails.phone,
+          fullAddress: composedAddress,
+          lat: pickupDetails.lat,
+          lng: pickupDetails.lng,
+        },
         dropAddress,
         packageDetails: {
           packageType,
@@ -769,7 +657,6 @@ const ParcelDeliveryPage = () => {
         setWeightInput("0.2");
         setWeightUnit("kg");
         setFareEstimation(null);
-        fetchHistory();
         navigate(`/parcel/search/${createdParcel._id}`);
       } else {
         toast.error(response.data.message || "Failed to create request");
@@ -781,123 +668,29 @@ const ParcelDeliveryPage = () => {
     }
   };
 
-  const handleTrackParcel = async (id) => {
-    setTrackingLoading(true);
-    try {
-      const response = await parcelApi.trackParcel(id);
-      if (response.data && response.data.success) {
-        setTrackingParcel(response.data.result);
-      } else {
-        toast.error("Could not fetch tracking details");
-      }
-    } catch (error) {
-      toast.error("Tracking request failed");
-    } finally {
-      setTrackingLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!trackingParcel) return;
-    if (trackingParcel.status === 'DELIVERED' || trackingParcel.status === 'CANCELLED') return;
-
-    const interval = setInterval(async () => {
-      try {
-        const response = await parcelApi.trackParcel(trackingParcel._id);
-        if (response.data && response.data.success) {
-          setTrackingParcel(response.data.result);
-        }
-      } catch (err) {
-        console.error("Failed to poll tracking status", err);
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [trackingParcel]);
-
-  useEffect(() => {
-    if (!trackingParcel?._id) return undefined;
-    const getToken = getCustomerToken;
-    getOrderSocket(getToken);
-    return onParcelStatusUpdate(getToken, (payload) => {
-      if (!payload?.parcelId || payload.parcelId !== trackingParcel._id) return;
-      if (payload.parcel) {
-        setTrackingParcel(payload.parcel);
-        return;
-      }
-      if (payload.status) {
-        setTrackingParcel((prev) => (prev ? { ...prev, status: payload.status } : prev));
-      }
-    });
-  }, [trackingParcel?._id]);
-
   return (
     <div className="container mx-auto max-w-4xl px-4 py-6 font-outfit mt-4">
       {/* Header section */}
-      {!trackingParcel ? (
-        <div className="bg-gradient-to-r from-primary to-blue-600 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <button
-              onClick={() => navigate('/')}
-              className="flex items-center gap-1.5 text-white/85 hover:text-white font-bold text-xs mb-4 transition-all hover:-translate-x-1"
-            >
-              <ChevronLeft size={16} /> Back to Home
-            </button>
-            <span className="bg-white/20 text-xs font-extrabold uppercase px-3 py-1.5 rounded-full tracking-widest">
-              Up to {maxWeightKg} KG Only
-            </span>
-            <h1 className="text-3xl md:text-4xl font-black tracking-tight mt-3">
-              Instant Parcel Delivery
-            </h1>
-            <p className="text-white/80 font-medium text-sm md:text-base mt-2 max-w-lg">
-              Send documents, keys, food, or electronics instantly across the city. Smooth, secure, and fully tracked.
-            </p>
-          </div>
-          <div className="flex gap-2 bg-white/10 p-1.5 rounded-2xl backdrop-blur-sm self-stretch md:self-auto justify-center">
-            <button
-              onClick={() => switchTab('book')}
-              className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-                activeTab === 'book' && !trackingParcel
-                  ? 'bg-white text-primary shadow-md'
-                  : 'hover:bg-white/10 text-white'
-              }`}
-            >
-              <Truck size={16} /> Book
-            </button>
-            <button
-              onClick={() => switchTab('history')}
-              className={`flex-1 md:flex-initial px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-                activeTab === 'history' || trackingParcel
-                  ? 'bg-white text-primary shadow-md'
-                  : 'hover:bg-white/10 text-white'
-              }`}
-            >
-              <History size={16} /> History & Status
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-5 p-2">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => switchTab('book')}
-              className="px-3 py-2 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 text-slate-600 hover:bg-slate-100"
-            >
-              <Truck size={16} /> Book
-            </button>
-            <button
-              onClick={() => switchTab('history')}
-              className="px-3 py-2 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 bg-slate-900 text-white"
-            >
-              <History size={16} /> History & Status
-            </button>
-          </div>
-        </div>
-      )}
+      <div className="bg-gradient-to-r from-primary to-blue-600 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8">
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center gap-1.5 text-white/85 hover:text-white font-bold text-xs mb-4 transition-all hover:-translate-x-1"
+        >
+          <ChevronLeft size={16} /> Back to Home
+        </button>
+        <span className="bg-white/20 text-xs font-extrabold uppercase px-3 py-1.5 rounded-full tracking-widest">
+          Up to {maxWeightKg} KG Only
+        </span>
+        <h1 className="text-3xl md:text-4xl font-black tracking-tight mt-3 flex items-center gap-3">
+          <Truck size={32} className="shrink-0" /> Instant Parcel Delivery
+        </h1>
+        <p className="text-white/80 font-medium text-sm md:text-base mt-2 max-w-lg">
+          Send documents, keys, food, or electronics instantly across the city. Smooth, secure, and fully tracked.
+        </p>
+      </div>
 
       {/* Main Content Area */}
-      {!trackingParcel && activeTab === 'book' && (
-        <form onSubmit={handlePlaceOrder} className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <form onSubmit={handlePlaceOrder} className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Form Side */}
           <div className="space-y-6">
             {/* Pickup Details Card */}
@@ -937,16 +730,78 @@ const ParcelDeliveryPage = () => {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Full Pickup Address</label>
-                <textarea
-                  required
-                  rows={2}
-                  placeholder="Address details, floor, apartment number..."
-                  value={pickupDetails.fullAddress}
-                  onChange={(e) => setPickupDetails(p => ({ ...p, fullAddress: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                />
+              <div className="space-y-3">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+                  Full Pickup Address
+                </p>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    House / Flat / Building / Street
+                  </label>
+                  <textarea
+                    required
+                    rows={2}
+                    placeholder="Flat No, Building name, Street / Area"
+                    value={pickupDetails.address}
+                    onChange={(e) => updatePickupField('address', e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Nearest Landmark <span className="normal-case font-medium text-slate-400">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Near City Mall, Opp. Temple"
+                    value={pickupDetails.landmark}
+                    onChange={(e) => updatePickupField('landmark', e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-500 uppercase">City</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="City"
+                      value={pickupDetails.city}
+                      onChange={(e) => updatePickupField('city', e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-500 uppercase">State</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="State"
+                      value={pickupDetails.state}
+                      onChange={(e) => updatePickupField('state', e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Pincode</label>
+                  <input
+                    type="text"
+                    required
+                    inputMode="numeric"
+                    maxLength={6}
+                    placeholder="110075"
+                    value={pickupDetails.pincode}
+                    onChange={(e) =>
+                      updatePickupField('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                </div>
               </div>
 
               <button
@@ -1301,350 +1156,6 @@ const ParcelDeliveryPage = () => {
             </div>
           </div>
         </form>
-      )}
-
-      {/* History & Active Orders Tab */}
-      {!trackingParcel && activeTab === 'history' && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-black text-slate-800 flex items-center gap-2 mb-2">
-            <History className="text-primary" size={22} /> Delivery Requests
-          </h2>
-
-          {history.length === 0 ? (
-            <div className="bg-white rounded-3xl p-12 border border-slate-100 text-center space-y-3">
-              <div className="h-16 w-16 bg-slate-50 text-slate-400 rounded-full flex items-center justify-center mx-auto">
-                <Package size={32} />
-              </div>
-              <p className="text-slate-800 font-bold text-lg">No parcel requests found</p>
-              <p className="text-slate-400 text-sm max-w-sm mx-auto">
-                You haven't requested any parcel deliveries yet. Create your first request above!
-              </p>
-              <button
-                onClick={() => switchTab('book')}
-                className="px-6 py-2.5 bg-primary text-white font-bold text-sm rounded-xl hover:bg-primary-dark transition-all"
-              >
-                Book a Delivery
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {history.map((parcel) => (
-                <div key={parcel._id} className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm flex flex-col justify-between gap-4">
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                        ID: ...{parcel._id.slice(-6)}
-                      </span>
-                      <span className={`text-xs font-extrabold px-3 py-1 rounded-full uppercase ${
-                        parcel.status === 'DELIVERED' ? 'bg-green-100 text-green-700' :
-                        parcel.status === 'CANCELLED' ? 'bg-red-100 text-red-600' :
-                        parcel.status === 'SEARCHING' ? 'bg-amber-100 text-amber-700 animate-pulse' :
-                        'bg-blue-100 text-blue-700 animate-pulse'
-                      }`}>
-                        {formatParcelStatusLabel(parcel.status)}
-                      </span>
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <MapPin size={14} className="text-primary shrink-0 mt-0.5" />
-                        <div className="text-xs text-slate-600 line-clamp-1">
-                          <strong className="text-slate-800">From:</strong> {parcel.pickupAddress.fullAddress}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <MapPin size={14} className="text-red-500 shrink-0 mt-0.5" />
-                        <div className="text-xs text-slate-600 line-clamp-1">
-                          <strong className="text-slate-800">To:</strong>{' '}
-                          {parcel.courierCompany
-                            ? `${parcel.courierCompany}${parcel.destinationCity ? `, ${parcel.destinationCity}` : ''}`
-                            : parcel.dropAddress?.fullAddress || '—'}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-slate-100 pt-3 flex justify-between items-center">
-                    <div>
-                      <span className="text-[10px] text-slate-400 font-bold block uppercase">Fare</span>
-                      <span className="text-base font-black text-slate-900">₹{parcel.fare}</span>
-                    </div>
-                    
-                    <button
-                      onClick={() => handleTrackParcel(parcel._id)}
-                      className="px-4 py-2 bg-slate-900 text-white hover:bg-slate-800 font-bold text-xs rounded-xl transition-all"
-                    >
-                      Track & Details
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Live tracking details sub-page */}
-      {trackingParcel && (
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-100 shadow-lg space-y-4 sm:space-y-6">
-          <div className="flex flex-wrap items-start gap-3 border-b border-slate-100 pb-3 sm:pb-4">
-            <button
-              onClick={() => { setTrackingParcel(null); fetchHistory(); }}
-              className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-            >
-              <ChevronLeft size={20} className="text-slate-700" />
-            </button>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base sm:text-lg font-black text-slate-800">
-                Track Delivery Request
-              </h2>
-              <p className="text-[11px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5 break-all">
-                ID: {trackingParcel._id}
-              </p>
-            </div>
-            <span className={`text-[11px] sm:text-xs font-black px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full uppercase whitespace-nowrap ${
-              trackingParcel.status === 'DELIVERED' ? 'bg-green-100 text-green-700' :
-              trackingParcel.status === 'CANCELLED' ? 'bg-red-100 text-red-600' :
-              trackingParcel.status === 'SEARCHING' ? 'bg-amber-100 text-amber-700 animate-pulse' :
-              'bg-blue-100 text-blue-700'
-            }`}>
-              {formatParcelStatusLabel(trackingParcel.status)}
-            </span>
-          </div>
-
-          {(trackingParcel.status === 'SEARCHING' || trackingParcel.status === 'REQUESTED') && (
-            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-3">
-              <Clock className="text-amber-600 shrink-0 mt-0.5" size={18} />
-              <div>
-                <p className="text-sm font-black text-amber-900">Finding a nearby rider</p>
-                <p className="text-xs text-amber-700 font-medium mt-1">
-                  Available parcel delivery partners are being notified. The first rider to accept will be assigned to your booking.
-                </p>
-              </div>
-            </div>
-          )}
-
-          <LiveTrackingMap
-            pickupAddress={trackingParcel.pickupAddress}
-            dropAddress={trackingParcel.dropAddress}
-            deliveryPartner={trackingParcel.deliveryPartnerId}
-          />
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 lg:gap-8">
-            {/* Tracking Progress */}
-            <div className="space-y-6">
-              {/* OTP code warning */}
-              {trackingParcel.status !== 'DELIVERED' && trackingParcel.status !== 'CANCELLED' && (
-                <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl p-5 text-white flex justify-between items-center shadow-md">
-                  <div>
-                    <span className="text-[10px] font-black uppercase text-white/70 tracking-widest">
-                      Delivery Verification OTP
-                    </span>
-                    <p className="text-xs text-white/90 font-medium mt-1">
-                      Share this OTP with the rider to verify delivery completion.
-                    </p>
-                  </div>
-                  <div className="text-3xl font-black tracking-widest bg-white/10 px-4 py-2 rounded-xl border border-white/20">
-                    {trackingParcel.otp}
-                  </div>
-                </div>
-              )}
-
-              {/* Status Flow Display */}
-              <div className="bg-slate-50 rounded-2xl p-4 sm:p-5 space-y-4">
-                <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wider">
-                  Status History
-                </h3>
-                <div className="relative pl-5 sm:pl-6 space-y-5 sm:space-y-6 border-l-2 border-slate-200">
-                  {[
-                    { key: 'REQUESTED', label: 'Requested', desc: 'Booking requested by customer.' },
-                    { key: 'SEARCHING', label: 'Searching for rider', desc: 'Notifying nearby parcel riders.' },
-                    { key: 'ACCEPTED', label: 'Accepted', desc: 'Rider confirmed acceptance.' },
-                    { key: 'RIDER_ASSIGNED', label: 'Rider Assigned', desc: 'Rider is on the way.' },
-                    { key: 'PICKUP_REACHED', label: 'Rider Reached Pickup', desc: 'Rider reached the pickup point.' },
-                    { key: 'PICKED_UP', label: 'Picked Up', desc: 'Rider has picked up the packet.' },
-                    { key: 'OUT_FOR_DELIVERY', label: 'Out for Delivery', desc: 'Rider is heading to drop location.' },
-                    { key: 'DELIVERED', label: 'Delivered Successfully', desc: 'Packet delivered to dropoff location.' }
-                  ].map((step, idx) => {
-                    const statuses = [
-                      'REQUESTED',
-                      'SEARCHING',
-                      'ACCEPTED',
-                      'RIDER_ASSIGNED',
-                      'PICKUP_REACHED',
-                      'PICKED_UP',
-                      'OUT_FOR_DELIVERY',
-                      'DELIVERED'
-                    ];
-                    const currentIdx = statuses.indexOf(trackingParcel.status);
-                    const stepIdx = statuses.indexOf(step.key);
-                    const isDone = stepIdx <= currentIdx && trackingParcel.status !== 'CANCELLED';
-                    const isCurrent = stepIdx === currentIdx && trackingParcel.status !== 'CANCELLED';
-
-                    return (
-                      <div key={step.key} className="relative">
-                        <div className={`absolute -left-[27px] sm:-left-[31px] top-0.5 h-4 w-4 rounded-full border-2 bg-white flex items-center justify-center transition-all ${
-                          isCurrent ? 'border-primary ring-4 ring-primary/20 scale-110' :
-                          isDone ? 'border-primary bg-primary' : 'border-slate-300'
-                        }`}>
-                          {isDone && !isCurrent && <div className="h-1.5 w-1.5 bg-white rounded-full" />}
-                        </div>
-                        <div>
-                          <h4 className={`text-[11px] sm:text-xs font-bold ${isCurrent ? 'text-primary' : isDone ? 'text-slate-800' : 'text-slate-400'}`}>
-                            {step.label}
-                          </h4>
-                          <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-4">
-                            {step.desc}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Address & Package Info Card */}
-            <div className="space-y-6">
-              <div className="bg-slate-50 rounded-2xl p-4 sm:p-5 space-y-4">
-                <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wider">
-                  Parcel Overview
-                </h3>
-
-                <div className="space-y-3">
-                  <div className="flex gap-2">
-                    <MapPin className="text-primary shrink-0 mt-0.5" size={16} />
-                    <div>
-                      <strong className="text-xs text-slate-800 block">Pickup details:</strong>
-                      <span className="text-xs text-slate-600">{trackingParcel.pickupAddress.name} ({trackingParcel.pickupAddress.phone})</span>
-                      <p className="text-xs text-slate-500 mt-0.5">{trackingParcel.pickupAddress.fullAddress}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 border-t border-slate-200/50 pt-3">
-                    <Building2 className="text-red-500 shrink-0 mt-0.5" size={16} />
-                    <div>
-                      <strong className="text-xs text-slate-800 block">Dropoff details:</strong>
-                      {trackingParcel.courierCompany && (
-                        <p className="text-xs text-slate-600 mt-0.5">
-                          Courier: <span className="font-bold">{trackingParcel.courierCompany}</span>
-                        </p>
-                      )}
-                      {trackingParcel.destinationCity && (
-                        <p className="text-xs text-slate-600 mt-0.5">
-                          City: <span className="font-bold">{trackingParcel.destinationCity}</span>
-                        </p>
-                      )}
-                      {trackingParcel.preferredPickupDate && (
-                        <p className="text-xs text-slate-600 mt-0.5">
-                          Booked for:{' '}
-                          <span className="font-bold">
-                            {trackingParcel.pickupWindow === 'today'
-                              ? 'Today only'
-                              : trackingParcel.pickupWindow === '7_days'
-                                ? 'Booked for 7 days'
-                                : trackingParcel.pickupWindow === '15_days'
-                                  ? 'Booked for 15 days'
-                                  : trackingParcel.pickupWindow === '30_days'
-                                    ? 'Booked for 30 days'
-                                    : trackingParcel.pickupWindow === 'specific'
-                                      ? 'Till a date'
-                                      : 'Scheduled'}
-                            {' · '}
-                            {trackingParcel.pickupWindow && trackingParcel.pickupWindow !== 'specific' && trackingParcel.pickupWindow !== 'today'
-                              ? `till ${new Date(trackingParcel.preferredPickupDate).toLocaleDateString('en-IN', {
-                                  day: 'numeric',
-                                  month: 'short',
-                                  year: 'numeric',
-                                })}`
-                              : new Date(trackingParcel.preferredPickupDate).toLocaleDateString('en-IN', {
-                                  day: 'numeric',
-                                  month: 'short',
-                                  year: 'numeric',
-                                })}
-                          </span>
-                        </p>
-                      )}
-                      {!trackingParcel.courierCompany && !trackingParcel.destinationCity && (
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {trackingParcel.dropAddress?.fullAddress || '—'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 border-t border-slate-200/50 pt-3">
-                    <Package className="text-slate-600 shrink-0 mt-0.5" size={16} />
-                    <div>
-                      <strong className="text-xs text-slate-800 block">Package details:</strong>
-                      <span className="text-xs text-slate-600 uppercase font-bold">{trackingParcel.packageDetails.packageType}</span>
-                      <p className="text-xs text-slate-500 mt-0.5">Weight: {trackingParcel.weight} KG</p>
-                      {trackingParcel.packageDetails.description && (
-                        <p className="text-xs text-slate-400 mt-0.5 italic">"{trackingParcel.packageDetails.description}"</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Rider Details Card */}
-              {trackingParcel.deliveryPartnerId ? (
-                <div className="bg-white rounded-2xl p-5 border border-slate-200 flex items-center gap-4">
-                  <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200 overflow-hidden">
-                    {trackingParcel.deliveryPartnerId.profileImage ? (
-                      <img src={trackingParcel.deliveryPartnerId.profileImage} alt="rider" className="h-full w-full object-cover" />
-                    ) : (
-                      <User className="text-slate-500" size={24} />
-                    )}
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Assigned Rider</span>
-                    <h4 className="text-sm font-black text-slate-800 mt-0.5">
-                      {trackingParcel.deliveryPartnerId.name}
-                    </h4>
-                    <p className="text-xs text-slate-500 font-medium mt-0.5 flex items-center gap-1">
-                      <Phone size={12} /> {trackingParcel.deliveryPartnerId.phone}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-amber-50 rounded-2xl p-5 border border-amber-200 text-center space-y-2">
-                  <Clock className="text-amber-500 mx-auto animate-pulse" size={24} />
-                  <h4 className="text-sm font-bold text-amber-800">
-                    Finding Delivery Partner
-                  </h4>
-                  <p className="text-xs text-amber-600 max-w-xs mx-auto font-medium">
-                    We've notified delivery partners nearby. Once accepted, rider info will update here.
-                  </p>
-                </div>
-              )}
-
-              {/* Proof Images */}
-              {(trackingParcel.pickupProofImage || trackingParcel.deliveryProofImage) && (
-                <div className="bg-slate-50 rounded-2xl p-5 space-y-4">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">
-                    Delivery Proofs
-                  </h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {trackingParcel.pickupProofImage && (
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-slate-400 block uppercase">Pickup Photo</span>
-                        <img src={trackingParcel.pickupProofImage} alt="Pickup Proof" className="rounded-xl h-24 w-full object-cover border border-slate-200" />
-                      </div>
-                    )}
-                    {trackingParcel.deliveryProofImage && (
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-slate-400 block uppercase">Delivery Photo</span>
-                        <img src={trackingParcel.deliveryProofImage} alt="Delivery Proof" className="rounded-xl h-24 w-full object-cover border border-slate-200" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Map Picker Modal */}
       {mapPickerTarget && (

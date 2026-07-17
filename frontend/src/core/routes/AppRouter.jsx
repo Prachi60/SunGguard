@@ -50,6 +50,7 @@ const PaymentStatusPage = lazy(() => import('../../modules/customer/pages/Paymen
 const SearchPage = lazy(() => import('../../modules/customer/pages/SearchPage'));
 const WalletPage = lazy(() => import('../../modules/customer/pages/WalletPage'));
 const ParcelDeliveryPage = lazy(() => import('../../modules/customer/pages/ParcelDeliveryPage'));
+const ParcelHistoryPage = lazy(() => import('../../modules/customer/pages/ParcelHistoryPage'));
 const ParcelSearchTrackingPage = lazy(() => import('../../modules/customer/pages/ParcelSearchTrackingPage'));
 // CAR WASH DISABLED
 // const CarWashBookingPage = lazy(() => import('../../modules/customer/pages/CarWashBookingPage'));
@@ -204,6 +205,7 @@ const AppRouter = () => {
                         { path: 'payment-status', element: <PaymentStatusPage /> },
                         { path: 'profile', element: <ProtectedRoute><ProfilePage /></ProtectedRoute> },
                         { path: 'profile/edit', element: <ProtectedRoute><EditProfilePage /></ProtectedRoute> },
+                        { path: 'profile/parcel-history', element: <ProtectedRoute><ParcelHistoryPage /></ProtectedRoute> },
                         { path: 'wallet', element: <ProtectedRoute><WalletPage /></ProtectedRoute> },
                         { path: 'parcel', element: <ProtectedRoute><ParcelDeliveryPage /></ProtectedRoute> },
                         { path: 'parcel/search/:id', element: <ProtectedRoute><ParcelSearchTrackingPage /></ProtectedRoute> },

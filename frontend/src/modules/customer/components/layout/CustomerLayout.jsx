@@ -79,9 +79,9 @@ const CustomerLayout = ({ children, showHeader: showHeaderProp, fullHeight = fal
     // Route-based visibility logic
     const path = location.pathname.replace(/\/$/, '') || '/';
 
-    const hideHeaderRoutes = ['/', '/categories', '/orders', '/transactions', '/profile', '/profile/edit', '/wishlist', '/addresses', '/wallet', '/support', '/privacy', '/about', '/terms', '/checkout', '/search', '/chat', '/parcel'];
-    const hideBottomNavRoutes = ['/checkout', '/search', '/chat'];
-    const hideCartRoutes = ['/checkout', '/search', '/chat'];
+    const hideHeaderRoutes = ['/', '/categories', '/orders', '/transactions', '/profile', '/profile/edit', '/profile/parcel-history', '/wishlist', '/addresses', '/wallet', '/support', '/privacy', '/about', '/terms', '/checkout', '/search', '/chat', '/parcel'];
+    const hideBottomNavRoutes = ['/checkout', '/search', '/chat', '/profile/parcel-history'];
+    const hideCartRoutes = ['/checkout', '/search', '/chat', '/profile/parcel-history'];
 
     // If props are passed, use them. Otherwise, use route-based logic.
     const isParcelSearchPage = path.startsWith('/parcel/search');
@@ -101,7 +101,7 @@ const CustomerLayout = ({ children, showHeader: showHeaderProp, fullHeight = fal
         : (!hideCartRoutes.includes(path) && !path.startsWith('/orders') && !isParcelSearchPage);
 
     // Condition to hide the MobileFooterMessage ("India's last minute app") on specific pages
-    const hideFooterMessageRoutes = ['/profile', '/profile/edit'];
+    const hideFooterMessageRoutes = ['/profile', '/profile/edit', '/profile/parcel-history'];
     const showFooterMessage = showBottomNav && !hideFooterMessageRoutes.includes(path) && !path.startsWith('/category');
 
     // Hide elements on mobile only when product detail is open

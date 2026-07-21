@@ -30,6 +30,8 @@ export const parcelApi = {
       ttl: options.ttl ?? 12000,
       forceRefresh: options.forceRefresh ?? false,
     }),
+  getParcelRoute: (parcelId, params, config = {}) =>
+    axiosInstance.get(`/parcel/rider/route/${parcelId}`, { params, ...config }),
   riderGetAvailable: (options = {}) =>
     getWithDedupe("/parcel/rider/available", {}, {
       ttl: options.ttl ?? 8000,

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import {
   Truck,
@@ -22,9 +23,147 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { parcelApi } from "../../customer/services/parcelApi";
+import MapPicker from "../../../shared/components/MapPicker";
+import {
+  composeCourierFullAddress,
+  emptyCourierLocation,
+  courierLocationFromCompany,
+  buildCourierLocationPayload,
+  validateCourierLocationForm,
+} from "../utils/courierLocation";
 import { onParcelNew, onParcelStatusUpdate, getOrderSocket } from "@/core/services/orderSocket";
 import { createSocketTokenReader } from "@core/utils/authStorage";
 import { STORAGE_KEYS } from "@core/utils/storage";
+
+const updateCourierFormLocation = (formSetter, field, value) => {
+  formSetter((prev) => {
+    const location = { ...prev.location, [field]: value };
+    location.fullAddress = composeCourierFullAddress(location);
+    return { ...prev, location };
+  });
+};
+
+const CourierLocationFields = ({ location, onFieldChange, onOpenMap }) => (
+  <div className="space-y-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+    <div className="flex items-center justify-between gap-2">
+      <div>
+        <p className="text-xs font-black uppercase tracking-wider text-slate-500">
+          Office Location
+        </p>
+        <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+          Riders will drop parcels at this branch address.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onOpenMap}
+        className="inline-flex items-center gap-1.5 rounded-xl border border-primary/20 bg-white px-3 py-2 text-[11px] font-bold text-primary hover:bg-primary/5"
+      >
+        <MapPin size={14} />
+        {location.lat && location.lng ? "Update Map" : "Pick on Map"}
+      </button>
+    </div>
+
+    <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-1">
+        <label className="text-xs font-bold text-slate-500 uppercase">Flat / Shop No.</label>
+        <input
+          type="text"
+          value={location.flatNo}
+          onChange={(e) => onFieldChange("flatNo", e.target.value)}
+          placeholder="e.g. 12B"
+          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-bold text-slate-500 uppercase">Contact Phone</label>
+        <input
+          type="tel"
+          value={location.phone}
+          onChange={(e) => onFieldChange("phone", e.target.value)}
+          placeholder="10-digit number"
+          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+        />
+      </div>
+    </div>
+
+    <div className="space-y-1">
+      <label className="text-xs font-bold text-slate-500 uppercase">Street / Building</label>
+      <input
+        type="text"
+        required
+        value={location.address}
+        onChange={(e) => onFieldChange("address", e.target.value)}
+        placeholder="Building name, street, area"
+        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+      />
+    </div>
+
+    <div className="space-y-1">
+      <label className="text-xs font-bold text-slate-500 uppercase">Landmark</label>
+      <input
+        type="text"
+        value={location.landmark}
+        onChange={(e) => onFieldChange("landmark", e.target.value)}
+        placeholder="Near metro, mall, etc."
+        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+      />
+    </div>
+
+    <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-1">
+        <label className="text-xs font-bold text-slate-500 uppercase">City</label>
+        <input
+          type="text"
+          required
+          value={location.city}
+          onChange={(e) => onFieldChange("city", e.target.value)}
+          placeholder="City"
+          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-bold text-slate-500 uppercase">State</label>
+        <input
+          type="text"
+          required
+          value={location.state}
+          onChange={(e) => onFieldChange("state", e.target.value)}
+          placeholder="State"
+          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+        />
+      </div>
+    </div>
+
+    <div className="space-y-1">
+      <label className="text-xs font-bold text-slate-500 uppercase">Pincode</label>
+      <input
+        type="text"
+        required
+        value={location.pincode}
+        onChange={(e) => onFieldChange("pincode", e.target.value)}
+        placeholder="6-digit pincode"
+        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary bg-white"
+      />
+    </div>
+
+    {location.fullAddress ? (
+      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Full Address</p>
+        <p className="text-xs font-medium text-slate-700 mt-1">{location.fullAddress}</p>
+        {location.lat && location.lng ? (
+          <p className="text-[10px] text-slate-400 mt-1 font-mono">
+            {Number(location.lat).toFixed(5)}, {Number(location.lng).toFixed(5)}
+          </p>
+        ) : (
+          <p className="text-[10px] text-amber-600 mt-1 font-semibold">
+            Map location not selected yet
+          </p>
+        )}
+      </div>
+    ) : null}
+  </div>
+);
 
 const AdminParcelDashboard = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -40,6 +179,7 @@ const AdminParcelDashboard = () => {
     companyCharge: "0",
     sortOrder: "0",
     isActive: true,
+    location: emptyCourierLocation(),
   });
   const [editCourierForm, setEditCourierForm] = useState({
     name: "",
@@ -47,26 +187,82 @@ const AdminParcelDashboard = () => {
     companyCharge: "0",
     sortOrder: "0",
     isActive: true,
+    location: emptyCourierLocation(),
   });
+  const [courierMapPickerTarget, setCourierMapPickerTarget] = useState(null);
   const [courierSaving, setCourierSaving] = useState(false);
   const [courierEditModalOpen, setCourierEditModalOpen] = useState(false);
   const [editingCourierId, setEditingCourierId] = useState(null);
   const [courierToDelete, setCourierToDelete] = useState(null);
   const [courierDeleting, setCourierDeleting] = useState(false);
+  const courierEditScrollRef = useRef(null);
+  const courierEditModalRef = useRef(null);
+
+  const modalOpen = Boolean(selectedParcel || courierEditModalOpen || courierToDelete);
 
   useEffect(() => {
-    if (selectedParcel || courierEditModalOpen || courierToDelete) {
-      document.body.style.overflow = "hidden";
-      document.documentElement.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-      document.documentElement.style.overflow = "";
-    }
+    if (!modalOpen) return undefined;
+
+    const scrollY = window.scrollY;
+    const { overflow: prevBodyOverflow, position: prevBodyPosition, top: prevBodyTop, width: prevBodyWidth } =
+      document.body.style;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = "100%";
+    document.documentElement.style.overflow = "hidden";
+
     return () => {
-      document.body.style.overflow = "";
-      document.documentElement.style.overflow = "";
+      document.body.style.overflow = prevBodyOverflow;
+      document.body.style.position = prevBodyPosition;
+      document.body.style.top = prevBodyTop;
+      document.body.style.width = prevBodyWidth;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      window.scrollTo(0, scrollY);
     };
-  }, [selectedParcel, courierEditModalOpen, courierToDelete]);
+  }, [modalOpen]);
+
+  useEffect(() => {
+    if (!courierEditModalOpen) return undefined;
+
+    const handleWheel = (event) => {
+      const modalEl = courierEditModalRef.current;
+      const scrollEl = courierEditScrollRef.current;
+      const dialogEl = modalEl?.querySelector("[data-courier-edit-dialog]");
+
+      if (!modalEl?.contains(event.target)) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!dialogEl?.contains(event.target)) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!scrollEl) {
+        event.preventDefault();
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      scrollEl.scrollTop = Math.min(
+        maxScroll,
+        Math.max(0, scrollEl.scrollTop + event.deltaY),
+      );
+    };
+
+    document.addEventListener("wheel", handleWheel, { passive: false, capture: true });
+
+    return () => {
+      document.removeEventListener("wheel", handleWheel, { capture: true });
+    };
+  }, [courierEditModalOpen]);
 
   // Pricing Config state
   const [pricing, setPricing] = useState({
@@ -287,7 +483,39 @@ const AdminParcelDashboard = () => {
     companyCharge: "0",
     sortOrder: "0",
     isActive: true,
+    location: emptyCourierLocation(),
   };
+
+  const handleCourierMapConfirm = (mapLocation) => {
+    const applyMapLocation = (prev) => {
+      const location = {
+        ...prev.location,
+        address: prev.location.address || mapLocation.locality || mapLocation.address || "",
+        city: mapLocation.city || prev.location.city || "",
+        state: mapLocation.state || prev.location.state || "",
+        pincode: mapLocation.pincode || prev.location.pincode || "",
+        lat: mapLocation.lat,
+        lng: mapLocation.lng,
+      };
+      location.fullAddress = composeCourierFullAddress(location);
+      return { ...prev, location };
+    };
+
+    if (courierMapPickerTarget === "add") {
+      setAddCourierForm(applyMapLocation);
+    } else if (courierMapPickerTarget === "edit") {
+      setEditCourierForm(applyMapLocation);
+    }
+    setCourierMapPickerTarget(null);
+    toast.success("Courier office location updated");
+  };
+
+  const activeCourierMapLocation =
+    courierMapPickerTarget === "edit"
+      ? editCourierForm.location
+      : courierMapPickerTarget === "add"
+        ? addCourierForm.location
+        : null;
 
   const closeCourierEditModal = () => {
     setCourierEditModalOpen(false);
@@ -303,9 +531,19 @@ const AdminParcelDashboard = () => {
       companyCharge: String(company.companyCharge ?? 0),
       sortOrder: String(company.sortOrder ?? 0),
       isActive: company.isActive !== false,
+      location: courierLocationFromCompany(company),
     });
     setCourierEditModalOpen(true);
   };
+
+  const buildCourierApiPayload = (form) => ({
+    name: String(form.name || "").trim(),
+    platformCharge: Number(form.platformCharge) || 0,
+    companyCharge: Number(form.companyCharge) || 0,
+    sortOrder: Number(form.sortOrder) || 0,
+    isActive: form.isActive !== false,
+    ...buildCourierLocationPayload(form.location),
+  });
 
   const handleAddCourier = async (e) => {
     e.preventDefault();
@@ -313,16 +551,14 @@ const AdminParcelDashboard = () => {
     if (!name) {
       return toast.error("Courier company name is required");
     }
+    const locationError = validateCourierLocationForm(addCourierForm.location);
+    if (locationError) {
+      return toast.error(locationError);
+    }
 
     setCourierSaving(true);
     try {
-      const payload = {
-        name,
-        platformCharge: Number(addCourierForm.platformCharge) || 0,
-        companyCharge: Number(addCourierForm.companyCharge) || 0,
-        sortOrder: Number(addCourierForm.sortOrder) || 0,
-        isActive: addCourierForm.isActive !== false,
-      };
+      const payload = buildCourierApiPayload(addCourierForm);
       const res = await parcelApi.adminCreateCourier(payload);
       if (res.data?.success) {
         toast.success("Courier company added");
@@ -345,16 +581,14 @@ const AdminParcelDashboard = () => {
       return toast.error("Courier company name is required");
     }
     if (!editingCourierId) return;
+    const locationError = validateCourierLocationForm(editCourierForm.location);
+    if (locationError) {
+      return toast.error(locationError);
+    }
 
     setCourierSaving(true);
     try {
-      const payload = {
-        name,
-        platformCharge: Number(editCourierForm.platformCharge) || 0,
-        companyCharge: Number(editCourierForm.companyCharge) || 0,
-        sortOrder: Number(editCourierForm.sortOrder) || 0,
-        isActive: editCourierForm.isActive !== false,
-      };
+      const payload = buildCourierApiPayload(editCourierForm);
       const res = await parcelApi.adminUpdateCourier(editingCourierId, payload);
       if (res.data?.success) {
         toast.success("Courier company updated");
@@ -1043,6 +1277,14 @@ const AdminParcelDashboard = () => {
                       />
                     </div>
 
+                    <CourierLocationFields
+                      location={addCourierForm.location}
+                      onFieldChange={(field, value) =>
+                        updateCourierFormLocation(setAddCourierForm, field, value)
+                      }
+                      onOpenMap={() => setCourierMapPickerTarget("add")}
+                    />
+
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-slate-500 uppercase">
                         Platform Charge (₹)
@@ -1165,6 +1407,16 @@ const AdminParcelDashboard = () => {
                             </span>
                             {" · "}Sort: {company.sortOrder ?? 0}
                           </p>
+                          {company.location?.fullAddress ? (
+                            <p className="text-[11px] text-slate-500 mt-1 flex items-start gap-1">
+                              <MapPin size={12} className="shrink-0 mt-0.5 text-primary" />
+                              <span className="line-clamp-2">{company.location.fullAddress}</span>
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-amber-600 font-semibold mt-1">
+                              Office location not set — edit to add address
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
@@ -1286,7 +1538,7 @@ const AdminParcelDashboard = () => {
 
       {/* Selected Parcel Details Modal */}
       {selectedParcel && (
-        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 overflow-hidden overscroll-none">
           <style>{`
             .modal-scroll-pad::-webkit-scrollbar {
               width: 10px;
@@ -1442,115 +1694,153 @@ const AdminParcelDashboard = () => {
       )}
 
       {/* Edit Courier Modal */}
-      {courierEditModalOpen && (
-        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+      {courierEditModalOpen &&
+        createPortal(
           <div
-            className="absolute inset-0 z-0"
-            onClick={closeCourierEditModal}
-            aria-hidden="true"
-          />
-          <div
-            className="relative z-10 bg-white rounded-3xl border border-slate-100 shadow-xl max-w-md w-full overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
+            ref={courierEditModalRef}
+            className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 overflow-hidden overscroll-none touch-none"
           >
-            <div className="p-5 border-b border-slate-100 flex justify-between items-start">
-              <div>
-                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                  <Pencil className="text-primary" size={18} />
-                  Edit Courier Company
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Update name, platform charge, and visibility.
-                </p>
+            <style>{`
+              .modal-scroll-pad::-webkit-scrollbar {
+                width: 10px;
+                height: 10px;
+              }
+              .modal-scroll-pad::-webkit-scrollbar-track {
+                background: #f1f5f9 !important;
+                border-radius: 8px;
+              }
+              .modal-scroll-pad::-webkit-scrollbar-thumb {
+                background: #cbd5e1 !important;
+                border-radius: 8px;
+                border: 2px solid #f1f5f9;
+              }
+              .modal-scroll-pad::-webkit-scrollbar-thumb:hover {
+                background: #94a3b8 !important;
+              }
+            `}</style>
+            <div
+              className="absolute inset-0 z-0"
+              onClick={closeCourierEditModal}
+              aria-hidden="true"
+            />
+            <div
+              data-courier-edit-dialog
+              className="relative z-10 bg-white rounded-3xl border border-slate-100 shadow-xl max-w-lg w-full overflow-hidden flex flex-col touch-auto"
+              style={{ height: "min(90vh, calc(100dvh - 2rem))" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-5 border-b border-slate-100 flex justify-between items-start shrink-0">
+                <div>
+                  <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                    <Pencil className="text-primary" size={18} />
+                    Edit Courier Company
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Update name, charges, office address, and visibility.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeCourierEditModal}
+                  className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <XCircle size={22} />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={closeCourierEditModal}
-                className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
-              >
-                <XCircle size={22} />
-              </button>
-            </div>
 
-            <form onSubmit={handleUpdateCourier} className="p-5 space-y-4">
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Company Name</label>
-                <input
-                  type="text"
-                  required
-                  value={editCourierForm.name}
-                  onChange={(e) => setEditCourierForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="e.g. Blue Dart"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+              <form onSubmit={handleUpdateCourier} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                <div
+                  ref={courierEditScrollRef}
+                  className="p-5 space-y-4 overflow-y-auto overscroll-contain flex-1 min-h-0 modal-scroll-pad"
+                  style={{ WebkitOverflowScrolling: "touch", overscrollBehavior: "contain" }}
+                >
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Company Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editCourierForm.name}
+                    onChange={(e) => setEditCourierForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. Blue Dart"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                  />
+                </div>
+
+                <CourierLocationFields
+                  location={editCourierForm.location}
+                  onFieldChange={(field, value) =>
+                    updateCourierFormLocation(setEditCourierForm, field, value)
+                  }
+                  onOpenMap={() => setCourierMapPickerTarget("edit")}
                 />
-              </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">
-                  Platform Charge (₹)
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Platform Charge (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={editCourierForm.platformCharge}
+                    onChange={(e) =>
+                      setEditCourierForm((f) => ({ ...f, platformCharge: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                  />
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    Extra platform fee added to customer fare when this courier is selected.
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Courier Company Charge (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={editCourierForm.companyCharge}
+                    onChange={(e) =>
+                      setEditCourierForm((f) => ({ ...f, companyCharge: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                  />
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    How much this courier company itself charges.
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Sort Order</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={editCourierForm.sortOrder}
+                    onChange={(e) =>
+                      setEditCourierForm((f) => ({ ...f, sortOrder: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                  />
+                </div>
+
+                <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editCourierForm.isActive}
+                    onChange={(e) =>
+                      setEditCourierForm((f) => ({ ...f, isActive: e.target.checked }))
+                    }
+                    className="accent-primary h-4 w-4"
+                  />
+                  Active (shown on customer booking form)
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  required
-                  value={editCourierForm.platformCharge}
-                  onChange={(e) =>
-                    setEditCourierForm((f) => ({ ...f, platformCharge: e.target.value }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                />
-                <p className="text-[10px] text-slate-400 font-medium">
-                  Extra platform fee added to customer fare when this courier is selected.
-                </p>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">
-                  Courier Company Charge (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  required
-                  value={editCourierForm.companyCharge}
-                  onChange={(e) =>
-                    setEditCourierForm((f) => ({ ...f, companyCharge: e.target.value }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                />
-                <p className="text-[10px] text-slate-400 font-medium">
-                  How much this courier company itself charges.
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Sort Order</label>
-                <input
-                  type="number"
-                  step="1"
-                  value={editCourierForm.sortOrder}
-                  onChange={(e) =>
-                    setEditCourierForm((f) => ({ ...f, sortOrder: e.target.value }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                />
-              </div>
-
-              <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={editCourierForm.isActive}
-                  onChange={(e) =>
-                    setEditCourierForm((f) => ({ ...f, isActive: e.target.checked }))
-                  }
-                  className="accent-primary h-4 w-4"
-                />
-                Active (shown on customer booking form)
-              </label>
-
-              <div className="flex gap-2 pt-2">
+              <div className="p-5 border-t border-slate-100 shrink-0 flex gap-2 bg-white">
                 <button
                   type="button"
                   onClick={closeCourierEditModal}
@@ -1569,12 +1859,13 @@ const AdminParcelDashboard = () => {
               </div>
             </form>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
 
       {/* Delete Courier Confirm Modal */}
       {courierToDelete && (
-        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 overflow-hidden overscroll-none">
           <div
             className="absolute inset-0 z-0"
             onClick={() => !courierDeleting && setCourierToDelete(null)}
@@ -1622,6 +1913,21 @@ const AdminParcelDashboard = () => {
           </div>
         </div>
       )}
+
+      <MapPicker
+        isOpen={Boolean(courierMapPickerTarget)}
+        onClose={() => setCourierMapPickerTarget(null)}
+        onConfirm={handleCourierMapConfirm}
+        initialLocation={
+          activeCourierMapLocation?.lat && activeCourierMapLocation?.lng
+            ? { lat: activeCourierMapLocation.lat, lng: activeCourierMapLocation.lng }
+            : null
+        }
+        title="Select Courier Office Location"
+        searchPlaceholder="Search courier branch area..."
+        showRadius={false}
+        preferCurrentLocationOnOpen={false}
+      />
     </div>
   );
 };

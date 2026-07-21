@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
+import { GoogleMap, Marker, OverlayView, useJsApiLoader } from "@react-google-maps/api";
 import { MapPin, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { parcelApi } from "../../customer/services/parcelApi";
@@ -11,15 +11,9 @@ const NEXT_STATUS = {
   PICKUP_REACHED: { next: "PICKED_UP", label: "Picked Up Parcel" },
   PICKED_UP: { next: "OUT_FOR_DELIVERY", label: "Start Delivery" },
 };
-const MAP_LIBRARIES = ["places"];
-
-/** Heading to pickup only (before reaching). */
-const TO_PICKUP_STATUSES = new Set(["ACCEPTED", "RIDER_ASSIGNED"]);
-/** At pickup / parcel onboard — show full road path to drop (Ola-style). */
-const TO_DROP_STATUSES = new Set(["PICKUP_REACHED", "PICKED_UP", "OUT_FOR_DELIVERY"]);
+const MAP_LIBRARIES = ["geometry"];
 
 const ROUTE_REFRESH_MS = 20000;
-const ROUTE_MOVE_THRESHOLD_M = 40;
 
 function toLatLng(point) {
   if (!point) return null;
@@ -29,20 +23,6 @@ function toLatLng(point) {
   return { lat, lng };
 }
 
-function distanceMeters(a, b) {
-  if (!a || !b) return Infinity;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const R = 6371000;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
 const ParcelTaskPage = () => {
   const navigate = useNavigate();
   const { parcelId } = useParams();
@@ -50,15 +30,17 @@ const ParcelTaskPage = () => {
   const [saving, setSaving] = useState(false);
   const [otp, setOtp] = useState("");
   const [parcel, setParcel] = useState(null);
-  const [directions, setDirections] = useState(null);
-  const [riderLocation, setRiderLocation] = useState(null);
+  const [routeData, setRouteData] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [mapInstance, setMapInstance] = useState(null);
   const mapRef = useRef(null);
+  const routePolylineRef = useRef(null);
   const assignedRequestRef = useRef({ inFlight: false, lastFetchedAt: 0 });
-  const lastRouteOriginRef = useRef(null);
   const lastRouteKeyRef = useRef("");
   const lastRouteAtRef = useRef(0);
+  const routeAbortRef = useRef(null);
 
-  const { isLoaded } = useJsApiLoader({
+  const { isLoaded, loadError } = useJsApiLoader({
     id: "google-map-script",
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     libraries: MAP_LIBRARIES,
@@ -102,25 +84,6 @@ const ParcelTaskPage = () => {
     return () => clearInterval(timer);
   }, [loadAssignedParcel]);
 
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) return undefined;
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const lat = pos.coords?.latitude;
-        const lng = pos.coords?.longitude;
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-        setRiderLocation({ lat, lng });
-      },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
-    );
-    return () => {
-      if (watchId != null && navigator.geolocation?.clearWatch) {
-        navigator.geolocation.clearWatch(watchId);
-      }
-    };
-  }, []);
-
   const statusStep = useMemo(() => NEXT_STATUS[parcel?.status], [parcel?.status]);
   const completed = parcel?.status === "DELIVERED";
   const cancelled = parcel?.status === "CANCELLED";
@@ -129,99 +92,164 @@ const ParcelTaskPage = () => {
     () => toLatLng(parcel?.pickupAddress),
     [parcel?.pickupAddress?.lat, parcel?.pickupAddress?.lng],
   );
-  const dropPoint = useMemo(
+  const courierAgencyPoint = useMemo(
     () => toLatLng(parcel?.dropAddress),
     [parcel?.dropAddress?.lat, parcel?.dropAddress?.lng],
   );
-
-  const goingToDrop = TO_DROP_STATUSES.has(parcel?.status);
-  const goingToPickup = TO_PICKUP_STATUSES.has(parcel?.status) || !goingToDrop;
+  const courierCompanyName =
+    parcel?.courierCompany || parcel?.dropAddress?.name || "Courier Company";
+  const courierCity = parcel?.destinationCity || "";
 
   const routeEndpoints = useMemo(() => {
-    if (!pickupPoint || !dropPoint) return null;
+    if (!pickupPoint || !courierAgencyPoint) return null;
+    return { origin: pickupPoint, destination: courierAgencyPoint, phase: "agency" };
+  }, [pickupPoint, courierAgencyPoint]);
 
-    if (goingToDrop) {
-      // After pickup: full road path from rider (or pickup) → drop.
-      const origin = riderLocation || pickupPoint;
-      return { origin, destination: dropPoint, phase: "drop" };
+  const decodedPath = useMemo(() => {
+    const encoded = routeData?.polyline;
+    if (!encoded || !isLoaded || !window.google?.maps?.geometry?.encoding) return null;
+    try {
+      return window.google.maps.geometry.encoding.decodePath(encoded);
+    } catch {
+      return null;
     }
+  }, [routeData?.polyline, isLoaded]);
 
-    // Reached / assigned: full road path from rider → pickup.
-    // Fallback to full pickup→drop so map never looks empty.
-    if (riderLocation) {
-      return { origin: riderLocation, destination: pickupPoint, phase: "pickup" };
-    }
-    return { origin: pickupPoint, destination: dropPoint, phase: "full" };
-  }, [pickupPoint, dropPoint, riderLocation, goingToDrop, goingToPickup]);
+  const linePath = useMemo(() => {
+    if (decodedPath?.length) return decodedPath;
+    if (!routeEndpoints?.origin || !routeEndpoints?.destination) return [];
+    if (!routeData?.degraded) return [];
+    return [
+      routeEndpoints.origin,
+      routeEndpoints.destination,
+    ];
+  }, [decodedPath, routeData?.degraded, routeEndpoints]);
 
-  const fitRouteOnMap = useCallback((result) => {
+  const fitRouteOnMap = useCallback((path) => {
     const map = mapRef.current;
-    if (!map || !result?.routes?.[0]?.bounds || !window.google) return;
-    const bounds = result.routes[0].bounds;
-    // Keep route above bottom sheet (Ola-style padding).
+    if (!map || !path?.length || !window.google) return;
+    const bounds = new window.google.maps.LatLngBounds();
+    path.forEach((point) => bounds.extend(point));
+    if (pickupPoint) bounds.extend(pickupPoint);
+    if (courierAgencyPoint) bounds.extend(courierAgencyPoint);
     map.fitBounds(bounds, {
       top: 96,
       right: 36,
       bottom: Math.round(window.innerHeight * 0.42),
       left: 36,
     });
-  }, []);
+  }, [pickupPoint, courierAgencyPoint]);
 
-  useEffect(() => {
-    if (!isLoaded || !window.google || !routeEndpoints) return;
+  const fetchRoute = useCallback(async () => {
+    if (!parcelId || !routeEndpoints) return;
 
     const { origin, destination, phase } = routeEndpoints;
     const routeKey = `${phase}:${origin.lat.toFixed(4)},${origin.lng.toFixed(4)}>${destination.lat.toFixed(4)},${destination.lng.toFixed(4)}`;
     const now = Date.now();
-    const movedFar =
-      !lastRouteOriginRef.current ||
-      distanceMeters(lastRouteOriginRef.current, origin) >= ROUTE_MOVE_THRESHOLD_M;
     const timedOut = now - lastRouteAtRef.current >= ROUTE_REFRESH_MS;
-    const phaseChanged = !lastRouteKeyRef.current.startsWith(`${phase}:`);
-    const hasRoute = Boolean(lastRouteKeyRef.current);
 
     if (
       lastRouteKeyRef.current === routeKey ||
-      (!phaseChanged && !movedFar && !timedOut && hasRoute)
+      (!timedOut && Boolean(lastRouteKeyRef.current))
     ) {
       return;
     }
 
-    const service = new window.google.maps.DirectionsService();
-    service.route(
-      {
-        origin,
-        destination,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        provideRouteAlternatives: false,
-      },
-      (result, status) => {
-        if (status !== window.google.maps.DirectionsStatus.OK || !result) return;
-        lastRouteKeyRef.current = routeKey;
-        lastRouteOriginRef.current = origin;
-        lastRouteAtRef.current = Date.now();
-        setDirections(result);
-        // Fit full path into view (like Ola).
-        requestAnimationFrame(() => fitRouteOnMap(result));
-      },
-    );
-  }, [isLoaded, routeEndpoints, fitRouteOnMap]);
+    if (routeAbortRef.current) routeAbortRef.current.abort();
+    const controller = new AbortController();
+    routeAbortRef.current = controller;
+    setRouteLoading(true);
 
-  // Re-fit when map instance becomes ready after directions already loaded.
+    try {
+      const res = await parcelApi.getParcelRoute(
+        parcelId,
+        {
+          phase,
+          originLat: origin.lat,
+          originLng: origin.lng,
+          _t: now,
+        },
+        { signal: controller.signal },
+      );
+      if (res.data?.success) {
+        const nextRoute = res.data.result || res.data.data || null;
+        lastRouteKeyRef.current = routeKey;
+        lastRouteAtRef.current = Date.now();
+        setRouteData(nextRoute);
+      }
+    } catch (error) {
+      if (error?.name !== "CanceledError" && error?.code !== "ERR_CANCELED") {
+        setRouteData((prev) => prev || { degraded: true });
+      }
+    } finally {
+      if (routeAbortRef.current === controller) routeAbortRef.current = null;
+      setRouteLoading(false);
+    }
+  }, [parcelId, routeEndpoints]);
+
   useEffect(() => {
-    if (directions) fitRouteOnMap(directions);
-  }, [directions, fitRouteOnMap]);
+    fetchRoute();
+    const timer = setInterval(fetchRoute, ROUTE_REFRESH_MS);
+    return () => {
+      clearInterval(timer);
+      if (routeAbortRef.current) {
+        routeAbortRef.current.abort();
+        routeAbortRef.current = null;
+      }
+    };
+  }, [fetchRoute]);
+
+  useEffect(() => {
+    if (!isLoaded || !mapInstance || !window.google?.maps) return undefined;
+
+    if (routePolylineRef.current) {
+      routePolylineRef.current.setMap(null);
+      routePolylineRef.current = null;
+    }
+
+    if (!linePath?.length) return undefined;
+
+    const pl = new window.google.maps.Polyline({
+      path: linePath,
+      strokeColor: "#2563eb",
+      strokeOpacity: routeData?.degraded ? 0.55 : 0.95,
+      strokeWeight: 6,
+      map: mapInstance,
+      zIndex: 10,
+    });
+    routePolylineRef.current = pl;
+    requestAnimationFrame(() => fitRouteOnMap(linePath));
+
+    return () => {
+      if (routePolylineRef.current) {
+        routePolylineRef.current.setMap(null);
+        routePolylineRef.current = null;
+      }
+    };
+  }, [isLoaded, mapInstance, linePath, routeData?.degraded, fitRouteOnMap]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !window.google) return undefined;
+    const handleResize = () => {
+      window.google.maps.event.trigger(map, "resize");
+      if (linePath?.length) fitRouteOnMap(linePath);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [linePath, fitRouteOnMap]);
 
   const mapCenter = useMemo(() => {
-    if (riderLocation) return riderLocation;
-    if (pickupPoint && dropPoint) {
+    if (pickupPoint && courierAgencyPoint) {
       return {
-        lat: (pickupPoint.lat + dropPoint.lat) / 2,
-        lng: (pickupPoint.lng + dropPoint.lng) / 2,
+        lat: (pickupPoint.lat + courierAgencyPoint.lat) / 2,
+        lng: (pickupPoint.lng + courierAgencyPoint.lng) / 2,
       };
     }
+    if (pickupPoint) return pickupPoint;
+    if (courierAgencyPoint) return courierAgencyPoint;
     return { lat: 22.7196, lng: 75.8577 };
-  }, [riderLocation, pickupPoint, dropPoint]);
+  }, [pickupPoint, courierAgencyPoint]);
 
   const handleAdvance = async () => {
     if (!parcel || !statusStep || saving) return;
@@ -236,6 +264,7 @@ const ParcelTaskPage = () => {
         // Force route rebuild for next phase.
         lastRouteKeyRef.current = "";
         lastRouteAtRef.current = 0;
+        setRouteData(null);
         toast.success("Parcel status updated");
       } else {
         toast.error(res.data?.message || "Failed to update status");
@@ -294,16 +323,21 @@ const ParcelTaskPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 relative overflow-x-hidden overscroll-x-none touch-pan-y">
+    <div className="h-screen bg-slate-100 relative overflow-hidden">
       <div className="absolute inset-0 z-0">
-        {isLoaded ? (
+        {loadError ? (
+          <div className="h-full w-full flex items-center justify-center px-6 text-center text-sm text-rose-700 bg-rose-50">
+            Map failed to load. Check your Google Maps API key.
+          </div>
+        ) : isLoaded ? (
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
             center={mapCenter}
             zoom={13}
             onLoad={(map) => {
               mapRef.current = map;
-              if (directions) fitRouteOnMap(directions);
+              setMapInstance(map);
+              if (linePath?.length) fitRouteOnMap(linePath);
             }}
             options={{
               disableDefaultUI: true,
@@ -313,55 +347,52 @@ const ParcelTaskPage = () => {
               gestureHandling: "greedy",
             }}
           >
-            {directions && (
-              <DirectionsRenderer
-                directions={directions}
-                options={{
-                  suppressMarkers: true,
-                  preserveViewport: true,
-                  polylineOptions: {
-                    strokeColor: "#2563eb",
-                    strokeOpacity: 0.95,
-                    strokeWeight: 6,
-                  },
-                }}
-              />
-            )}
             {pickupPoint && (
               <Marker
                 position={pickupPoint}
+                title="Pickup location"
                 label={{ text: "P", color: "white", fontWeight: "700" }}
               />
             )}
-            {dropPoint && (
-              <Marker
-                position={dropPoint}
-                label={{ text: "D", color: "white", fontWeight: "700" }}
-              />
-            )}
-            {riderLocation && (
-              <Marker
-                position={riderLocation}
-                title="You"
-                icon={
-                  window.google
-                    ? {
-                        path: window.google.maps.SymbolPath.CIRCLE,
-                        scale: 8,
-                        fillColor: "#0f172a",
-                        fillOpacity: 1,
-                        strokeColor: "#ffffff",
-                        strokeWeight: 3,
-                      }
-                    : undefined
-                }
-              />
+            {courierAgencyPoint && (
+              <>
+                <Marker
+                  position={courierAgencyPoint}
+                  title={courierCompanyName}
+                  label={{ text: "C", color: "white", fontWeight: "700" }}
+                />
+                <OverlayView
+                  position={courierAgencyPoint}
+                  mapPaneName={OverlayView.FLOAT_PANE}
+                  getPixelPositionOffset={(width, height) => ({
+                    x: -(width / 2),
+                    y: -(height + 42),
+                  })}
+                >
+                  <div className="rounded-lg bg-white px-2.5 py-1 shadow-md border border-slate-200 text-[10px] font-black text-slate-800 whitespace-nowrap max-w-[160px] truncate">
+                    {courierCompanyName}
+                  </div>
+                </OverlayView>
+              </>
             )}
           </GoogleMap>
         ) : (
           <div className="h-full w-full bg-slate-100 animate-pulse" />
         )}
       </div>
+
+      {routeData?.degraded && (
+        <div className="absolute top-24 left-4 right-4 z-20 rounded-xl bg-amber-50/95 border border-amber-200 px-3 py-2 text-[11px] text-amber-900 leading-snug">
+          Road route unavailable. Add <span className="font-mono">GOOGLE_MAPS_API_KEY</span> to backend
+          .env with Directions API enabled, then restart the server.
+        </div>
+      )}
+
+      {routeLoading && !linePath?.length && (
+        <div className="absolute top-24 left-4 z-20 rounded-lg bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow">
+          Loading route...
+        </div>
+      )}
 
       <div className="absolute top-4 left-4 right-4 z-20 rounded-2xl bg-white/90 backdrop-blur-md px-4 py-3 shadow">
         <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Parcel Task</p>
@@ -372,7 +403,8 @@ const ParcelTaskPage = () => {
           </div>
         </div>
         <p className="text-[11px] font-semibold text-slate-500 mt-1">
-          {goingToDrop ? "Route to drop" : "Route to pickup"}
+          Pickup → {courierCompanyName}
+          {courierCity ? ` (${courierCity})` : ""}
         </p>
       </div>
 
@@ -389,10 +421,13 @@ const ParcelTaskPage = () => {
               </div>
             </div>
             <div className="flex items-start gap-2">
-              <MapPin className="h-4 w-4 mt-0.5 text-rose-500" />
+              <MapPin className="h-4 w-4 mt-0.5 text-primary" />
               <div>
-                <p className="text-[11px] font-black text-slate-700">Drop</p>
-                <p className="text-xs text-slate-500">{parcel.dropAddress?.fullAddress}</p>
+                <p className="text-[11px] font-black text-slate-700">Courier Company</p>
+                <p className="text-xs font-semibold text-slate-800">{courierCompanyName}</p>
+                {courierCity ? (
+                  <p className="text-[11px] text-slate-500 mt-0.5">Agency city: {courierCity}</p>
+                ) : null}
               </div>
             </div>
           </div>

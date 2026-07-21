@@ -19,6 +19,7 @@ import {
 import { toast } from 'sonner';
 import { parcelApi } from '../services/parcelApi';
 import MapPicker from '../../../shared/components/MapPicker';
+import { composeCourierFullAddress } from '../../admin/utils/courierLocation';
 import { useAuth } from '@core/context/AuthContext';
 
 const FALLBACK_COURIER_COMPANIES = [
@@ -177,15 +178,8 @@ const CourierCompanySelect = ({ companies, value, onChange }) => {
         {selected ? (
           <span className="flex items-center justify-between gap-2 pr-1">
             <span className="font-semibold text-slate-800 truncate">{selected.name}</span>
-            <span className="flex items-center gap-1.5 shrink-0 text-[11px]">
-              {Number(selected.companyCharge) > 0 && (
-                <span className="text-slate-400 line-through decoration-slate-400">
-                  {formatInr(selected.companyCharge)}
-                </span>
-              )}
-              <span className="font-black text-primary">
-                Platform {formatInr(selected.platformCharge)}
-              </span>
+            <span className="shrink-0 text-[11px] font-black text-primary">
+              Platform {formatInr(selected.platformCharge)}
             </span>
           </span>
         ) : (
@@ -223,7 +217,6 @@ const CourierCompanySelect = ({ companies, value, onChange }) => {
             {companies.map((company) => {
               const optionValue = company.id || company.name;
               const isSelected = optionValue === selectedValue;
-              const companyFee = Number(company.companyCharge) || 0;
               const platformFee = Number(company.platformCharge) || 0;
               return (
                 <button
@@ -247,15 +240,8 @@ const CourierCompanySelect = ({ companies, value, onChange }) => {
                     >
                       {company.name}
                     </span>
-                    <span className="flex flex-col items-end gap-0.5 shrink-0">
-                      {companyFee > 0 && (
-                        <span className="text-[11px] text-slate-400 line-through decoration-slate-400">
-                          Courier {formatInr(companyFee)}
-                        </span>
-                      )}
-                      <span className="text-[11px] font-black text-primary">
-                        Platform {formatInr(platformFee)}
-                      </span>
+                    <span className="text-[11px] font-black text-primary shrink-0">
+                      Platform {formatInr(platformFee)}
                     </span>
                   </div>
                 </button>
@@ -497,7 +483,7 @@ const ParcelDeliveryPage = () => {
     fetchBookingConfig();
   }, [fetchBookingConfig]);
 
-  // Handle Fare Calculation when locations or weight change
+  // Handle Fare Calculation when locations, weight, courier, or booking duration change
   useEffect(() => {
     const calcFare = async () => {
       if (
@@ -517,6 +503,13 @@ const ParcelDeliveryPage = () => {
             weight: weightKg,
             courierCompanyId: selectedCourier?.id || undefined,
             courierCompany: selectedCourier?.name || undefined,
+            pickupWindow: selectedPickupWindow.value,
+            pickupWindowDays:
+              selectedPickupWindow.value === 'specific' ? null : selectedPickupWindow.days,
+            preferredPickupDate:
+              selectedPickupWindow.value === 'specific'
+                ? preferredPickupDate
+                : addDaysToDateInput(selectedPickupWindow.days),
           });
           if (res.data && res.data.success) {
             setFareEstimation(res.data.result);
@@ -533,7 +526,18 @@ const ParcelDeliveryPage = () => {
 
     const delayDebounce = setTimeout(calcFare, 500);
     return () => clearTimeout(delayDebounce);
-  }, [pickupDetails.lat, pickupDetails.lng, selectedCity?.lat, selectedCity?.lng, weightKg, selectedCourier?.id, selectedCourier?.name]);
+  }, [
+    pickupDetails.lat,
+    pickupDetails.lng,
+    selectedCity?.lat,
+    selectedCity?.lng,
+    weightKg,
+    selectedCourier?.id,
+    selectedCourier?.name,
+    selectedPickupWindow.value,
+    selectedPickupWindow.days,
+    preferredPickupDate,
+  ]);
 
   // Map Selection Confirmation
   const handleMapConfirm = (location) => {
@@ -606,13 +610,34 @@ const ParcelDeliveryPage = () => {
       return toast.error("Preferred pickup date cannot be in the past.");
     }
 
-    const dropAddress = {
-      name: courierCompany,
-      phone: String(pickupDetails.phone || '').replace(/\D/g, '').slice(-10) || '0000000000',
-      fullAddress: `${courierCompany} drop point, ${destinationCity}`,
-      lat: selectedCity.lat,
-      lng: selectedCity.lng,
-    };
+    const dropAddress = (() => {
+      const loc = selectedCourier?.location || {};
+      const hasStoredLocation =
+        loc.fullAddress?.trim() &&
+        Number.isFinite(Number(loc.lat)) &&
+        Number.isFinite(Number(loc.lng));
+
+      if (hasStoredLocation) {
+        return {
+          name: selectedCourier.name,
+          phone:
+            String(loc.phone || pickupDetails.phone || "")
+              .replace(/\D/g, "")
+              .slice(-10) || "0000000000",
+          fullAddress: loc.fullAddress.trim(),
+          lat: Number(loc.lat),
+          lng: Number(loc.lng),
+        };
+      }
+
+      return {
+        name: courierCompany,
+        phone: String(pickupDetails.phone || "").replace(/\D/g, "").slice(-10) || "0000000000",
+        fullAddress: `${courierCompany} drop point, ${destinationCity}`,
+        lat: selectedCity.lat,
+        lng: selectedCity.lng,
+      };
+    })();
 
     const resolvedPickupDate =
       selectedPickupWindow.value === 'specific'
@@ -832,15 +857,6 @@ const ParcelDeliveryPage = () => {
                   {selectedCourier
                     ? (
                       <>
-                        {Number(selectedCourier.companyCharge) > 0 && (
-                          <>
-                            Courier{' '}
-                            <span className="line-through text-slate-400">
-                              {formatInr(selectedCourier.companyCharge)}
-                            </span>
-                            {' · '}
-                          </>
-                        )}
                         Platform{' '}
                         <span className="font-bold text-primary">
                           {formatInr(selectedCourier.platformCharge)}
@@ -1049,7 +1065,7 @@ const ParcelDeliveryPage = () => {
                 </h2>
 
                 <div className="grid grid-cols-2 gap-3">
-                  {['COD', 'UPI', 'CARD', 'WALLET'].map((method) => (
+                  {['COD', 'UPI'].map((method) => (
                     <label
                       key={method}
                       className={`border-2 rounded-2xl p-3 flex items-center justify-between cursor-pointer transition-all hover:bg-slate-50 ${
@@ -1059,7 +1075,7 @@ const ParcelDeliveryPage = () => {
                       <div>
                         <span className="text-sm font-bold text-slate-800 uppercase">{method}</span>
                         <p className="text-[10px] text-slate-400 font-medium">
-                          {method === 'COD' ? 'Cash on pickup/drop' : method === 'WALLET' ? 'System Wallet' : 'Instant Online'}
+                          {method === 'COD' ? 'Cash on pickup/drop' : 'Instant Online'}
                         </p>
                       </div>
                       <input
@@ -1106,33 +1122,25 @@ const ParcelDeliveryPage = () => {
                     <span>₹{Number(fareEstimation.baseFare).toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Distance Fare ({fareEstimation.distance} km)</span>
-                    <span>₹{Number(fareEstimation.distanceFare).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
                     <span>Weight Charge ({weightKg} kg)</span>
                     <span>₹{Number(fareEstimation.weightFare).toFixed(2)}</span>
                   </div>
-                  {Number(fareEstimation.courierCharge) > 0 && (
+                  {Number(fareEstimation.platformCharge) > 0 && (
+                    <div className="flex justify-between">
+                      <span>Platform Charge</span>
+                      <span>₹{Number(fareEstimation.platformCharge).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {Number(fareEstimation.billableDays) > 1 && (
                     <>
-                      {Number(fareEstimation.companyCharge) > 0 && (
-                        <div className="flex justify-between">
-                          <span>Courier Company Fee</span>
-                          <span>₹{Number(fareEstimation.companyCharge).toFixed(2)}</span>
-                        </div>
-                      )}
-                      {Number(fareEstimation.platformCharge) > 0 && (
-                        <div className="flex justify-between">
-                          <span>Platform Charge</span>
-                          <span>₹{Number(fareEstimation.platformCharge).toFixed(2)}</span>
-                        </div>
-                      )}
-                      {!Number(fareEstimation.companyCharge) && !Number(fareEstimation.platformCharge) && (
-                        <div className="flex justify-between">
-                          <span>Courier Platform ({courierCompany || 'Selected'})</span>
-                          <span>₹{Number(fareEstimation.courierCharge).toFixed(2)}</span>
-                        </div>
-                      )}
+                      <div className="flex justify-between pt-1 border-t border-white/10">
+                        <span>Daily rate</span>
+                        <span>₹{Number(fareEstimation.dailyFare ?? fareEstimation.fare).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-white font-semibold">
+                        <span>× {Number(fareEstimation.billableDays)} days</span>
+                        <span>₹{Number(fareEstimation.fare).toFixed(2)}</span>
+                      </div>
                     </>
                   )}
                 </div>

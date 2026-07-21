@@ -6,7 +6,7 @@ const ProtectedRoute = ({ children }) => {
     const { isAuthenticated, isLoading, user } = useAuth();
     const location = useLocation();
 
-    if (isLoading) {
+    if (isLoading || (isAuthenticated && !user)) {
         return (
             <div className="flex h-screen w-full items-center justify-center">
                 <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
@@ -55,9 +55,7 @@ const ProtectedRoute = ({ children }) => {
         location.pathname.startsWith('/delivery') &&
         !location.pathname.startsWith('/delivery/pending-approval')
     ) {
-        const isApprovedDelivery = Boolean(user) && user.isVerified === true;
-
-        if (!isApprovedDelivery) {
+        if (user?.isVerified !== true) {
             return (
                 <Navigate
                     to="/delivery/pending-approval"

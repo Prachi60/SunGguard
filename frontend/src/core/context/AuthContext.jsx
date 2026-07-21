@@ -25,6 +25,16 @@ const ROLE_STORAGE_KEYS = {
 
 const LEGACY_TOKEN_KEY = STORAGE_KEYS.AUTH_LEGACY;
 
+/** Prefer the URL portal when fetching profile so HMR / role-store races cannot load the wrong role. */
+function inferProfileRole(fallbackRole) {
+    if (typeof window === 'undefined') return fallbackRole;
+    const path = window.location.pathname;
+    if (path.startsWith('/delivery')) return 'delivery';
+    if (path.startsWith('/seller')) return 'seller';
+    if (path.startsWith('/admin')) return 'admin';
+    return fallbackRole;
+}
+
 export const AuthProvider = ({ children }) => {
     const getSafeToken = (key) => getStoredAuthToken(ROLE_STORAGE_KEYS[key]);
 
@@ -49,6 +59,8 @@ export const AuthProvider = ({ children }) => {
     const [isLoading, setIsLoading] = useState(true);
     const token = authData[currentRole];
     const isAuthenticated = !!token;
+    const profileRole = inferProfileRole(currentRole);
+    const profileToken = authData[profileRole];
 
     useEffect(() => {
         const syncStoredTokens = () => {
@@ -124,17 +136,17 @@ export const AuthProvider = ({ children }) => {
     // Fetch user profile on mount or token change
     useEffect(() => {
         const fetchProfile = async () => {
-            if (token) {
+            if (profileToken) {
                 try {
                     setIsLoading(true);
                     // Use deduplicated fetch to avoid multiple simultaneous profile calls
-                    const endpoint = `/${currentRole}/profile`;
+                    const endpoint = `/${profileRole}/profile`;
                     const response = await getWithDedupe(endpoint, {}, { ttl: 5000 });
                     setUser(response.data.result);
                 } catch (error) {
                     console.error('Failed to fetch profile:', error);
-                    // Preserve stored tokens on request failures; only manual logout clears auth storage.
-                    setUser(null);
+                    // Preserve stored tokens and the last known profile on transient failures
+                    // (e.g. Vite HMR) so approval gates do not bounce verified riders.
                 } finally {
                     setIsLoading(false);
                 }
@@ -145,7 +157,7 @@ export const AuthProvider = ({ children }) => {
         };
 
         fetchProfile();
-    }, [token, currentRole]);
+    }, [profileToken, profileRole]);
 
     const login = (userData) => {
         const role = userData.role?.toLowerCase() || 'customer';
@@ -215,9 +227,9 @@ export const AuthProvider = ({ children }) => {
     };
 
     const refreshUser = useCallback(async () => {
-        if (token) {
+        if (profileToken) {
             try {
-                const endpoint = `/${currentRole}/profile`;
+                const endpoint = `/${profileRole}/profile`;
                 const response = await axiosInstance.get(endpoint);
                 setUser(response.data.result);
                 return response.data.result;
@@ -225,7 +237,7 @@ export const AuthProvider = ({ children }) => {
                 console.error('Failed to refresh profile:', error);
             }
         }
-    }, [token, currentRole]);
+    }, [profileToken, profileRole]);
 
     const value = useMemo(() => ({
         user,

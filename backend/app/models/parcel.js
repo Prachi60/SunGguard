@@ -109,6 +109,10 @@ const parcelSchema = new mongoose.Schema(
       courierCharge: { type: Number, default: 0 },
       platformCharge: { type: Number, default: 0 },
       companyCharge: { type: Number, default: 0 },
+      /** Per-day fare before multi-day multiplier. */
+      dailyFare: { type: Number, default: 0 },
+      /** Number of days charged (today=1, 7/15/30, or till-date span). */
+      billableDays: { type: Number, default: 1 },
     },
     courierCompanyId: {
       type: mongoose.Schema.Types.ObjectId,

@@ -21,6 +21,11 @@ import {
 import { resetAllParcelData } from "../services/parcelDataResetService.js";
 import { sendSmsIndiaHubOtp } from "../services/smsIndiaHubService.js";
 import { useRealSMS, generateParcelOtp } from "../utils/otp.js";
+import { getCachedRoute } from "../services/mapsRouteService.js";
+import {
+  resolveParcelBillableDays,
+  applyBillableDaysToFare,
+} from "../utils/parcelFare.js";
 
 /**
  * Send delivery verification OTP to the dropoff receiver phone.
@@ -96,7 +101,18 @@ async function sendParcelNotification(userId, role, title, body, eventType = "al
 
 export const calculateFare = async (req, res) => {
   try {
-    const { pickupLat, pickupLng, dropLat, dropLng, weight, courierCompany, courierCompanyId } = req.body;
+    const {
+      pickupLat,
+      pickupLng,
+      dropLat,
+      dropLng,
+      weight,
+      courierCompany,
+      courierCompanyId,
+      pickupWindow,
+      pickupWindowDays,
+      preferredPickupDate,
+    } = req.body;
 
     if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
       return handleResponse(res, 400, "Pickup and drop locations are required");
@@ -121,40 +137,56 @@ export const calculateFare = async (req, res) => {
     );
     const distanceKm = Math.round((distanceM / 1000 + Number.EPSILON) * 100) / 100;
     const baseFare = Math.round((Number(config.baseFare) || 0) * 100) / 100;
-    const perKmCharge = Number(config.perKmCharge) || 0;
     const weightCharge = Number(config.weightCharge) || 0;
 
-    const distanceFare =
-      Math.round((distanceKm * perKmCharge + Number.EPSILON) * 100) / 100;
+    // Distance fare and courier company fee are not charged to the customer.
+    const distanceFare = 0;
     const weightFare =
       Math.round((pkgWeight * weightCharge + Number.EPSILON) * 100) / 100;
 
-    let courierCharge = 0;
     let platformCharge = 0;
-    let companyCharge = 0;
     const courierKey = courierCompanyId || courierCompany;
     if (courierKey) {
       const courier = await CourierCompany.findActiveByNameOrId(courierKey);
       if (courier) {
         platformCharge = Math.round((Number(courier.platformCharge) || 0) * 100) / 100;
-        companyCharge = Math.round((Number(courier.companyCharge) || 0) * 100) / 100;
-        courierCharge =
-          Math.round((platformCharge + companyCharge + Number.EPSILON) * 100) / 100;
       }
     }
+    const companyCharge = 0;
+    const courierCharge = platformCharge;
 
-    const fare =
-      Math.round((baseFare + distanceFare + weightFare + courierCharge + Number.EPSILON) * 100) / 100;
+    const dailyFare =
+      Math.round((baseFare + weightFare + platformCharge + Number.EPSILON) * 100) / 100;
+
+    const billableDays = resolveParcelBillableDays({
+      pickupWindow,
+      pickupWindowDays,
+      preferredPickupDate,
+    });
+    const priced = applyBillableDaysToFare(
+      {
+        baseFare,
+        distanceFare,
+        weightFare,
+        platformCharge,
+        companyCharge,
+        courierCharge,
+        fare: dailyFare,
+      },
+      billableDays,
+    );
 
     return handleResponse(res, 200, "Fare calculated successfully", {
       distance: distanceKm,
-      baseFare,
-      distanceFare,
-      weightFare,
-      platformCharge,
-      companyCharge,
-      courierCharge,
-      fare,
+      baseFare: priced.baseFare,
+      distanceFare: priced.distanceFare,
+      weightFare: priced.weightFare,
+      platformCharge: priced.platformCharge,
+      companyCharge: priced.companyCharge,
+      courierCharge: priced.courierCharge,
+      dailyFare: priced.dailyFare,
+      billableDays: priced.billableDays,
+      fare: priced.fare,
     });
   } catch (error) {
     return handleResponse(res, 500, error.message);
@@ -272,18 +304,34 @@ export const createParcel = async (req, res) => {
     );
     const distanceKm = Math.round((distanceM / 1000 + Number.EPSILON) * 100) / 100;
     const baseFare = Math.round((Number(config.baseFare) || 0) * 100) / 100;
-    const distanceFare =
-      Math.round((distanceKm * (Number(config.perKmCharge) || 0) + Number.EPSILON) * 100) / 100;
+    // Distance fare and courier company fee are not charged to the customer.
+    const distanceFare = 0;
     const weightFare =
       Math.round((weight * (Number(config.weightCharge) || 0) + Number.EPSILON) * 100) / 100;
     const platformCharge =
       Math.round((Number(courierDoc.platformCharge) || 0) * 100) / 100;
-    const companyCharge =
-      Math.round((Number(courierDoc.companyCharge) || 0) * 100) / 100;
-    const courierCharge =
-      Math.round((platformCharge + companyCharge + Number.EPSILON) * 100) / 100;
-    const fare =
-      Math.round((baseFare + distanceFare + weightFare + courierCharge + Number.EPSILON) * 100) / 100;
+    const companyCharge = 0;
+    const courierCharge = platformCharge;
+    const dailyFare =
+      Math.round((baseFare + weightFare + platformCharge + Number.EPSILON) * 100) / 100;
+
+    const billableDays = resolveParcelBillableDays({
+      pickupWindow: windowValue,
+      pickupWindowDays: resolvedWindowDays,
+      preferredPickupDate: pickupDay,
+    });
+    const priced = applyBillableDaysToFare(
+      {
+        baseFare,
+        distanceFare,
+        weightFare,
+        platformCharge,
+        companyCharge,
+        courierCharge,
+        fare: dailyFare,
+      },
+      billableDays,
+    );
 
     // Generate 6-digit OTP code
     const otp = generateParcelOtp();
@@ -301,14 +349,16 @@ export const createParcel = async (req, res) => {
       pickupWindowDays: resolvedWindowDays,
       weight,
       distance: distanceKm,
-      fare,
+      fare: priced.fare,
       fareBreakdown: {
-        baseFare,
-        distanceFare,
-        weightFare,
-        platformCharge,
-        companyCharge,
-        courierCharge,
+        baseFare: priced.baseFare,
+        distanceFare: priced.distanceFare,
+        weightFare: priced.weightFare,
+        platformCharge: priced.platformCharge,
+        companyCharge: priced.companyCharge,
+        courierCharge: priced.courierCharge,
+        dailyFare: priced.dailyFare,
+        billableDays: priced.billableDays,
       },
       paymentStatus: paymentMethod === "COD" ? "PENDING" : "PAID", // Card/UPI/Wallet paid immediately
       paymentMethod,
@@ -547,6 +597,7 @@ export const getBookingConfig = async (req, res) => {
         name: c.name,
         platformCharge: Math.round((Number(c.platformCharge) || 0) * 100) / 100,
         companyCharge: Math.round((Number(c.companyCharge) || 0) * 100) / 100,
+        location: c.location || null,
       })),
     });
   } catch (error) {
@@ -740,6 +791,56 @@ export const riderGetAssignedParcels = async (req, res) => {
       .sort({ createdAt: -1 });
 
     return handleResponse(res, 200, "Assigned parcels retrieved successfully", parcels);
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
+/**
+ * Road route for assigned parcel task map.
+ * Query: phase=pickup|drop|full, originLat, originLng (rider position).
+ */
+export const getParcelRoute = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    const phase = String(req.query.phase || "pickup").toLowerCase();
+    const originLat = parseFloat(req.query.originLat);
+    const originLng = parseFloat(req.query.originLng);
+
+    if (!Number.isFinite(originLat) || !Number.isFinite(originLng)) {
+      return handleResponse(res, 400, "originLat and originLng required");
+    }
+
+    const parcel = await Parcel.findById(parcelId).lean();
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+
+    if (String(parcel.deliveryPartnerId) !== String(req.user.id)) {
+      return handleResponse(res, 403, "You are not authorized for this parcel");
+    }
+
+    const pickup = {
+      lat: Number(parcel.pickupAddress?.lat),
+      lng: Number(parcel.pickupAddress?.lng),
+    };
+    const drop = {
+      lat: Number(parcel.dropAddress?.lat),
+      lng: Number(parcel.dropAddress?.lng),
+    };
+
+    if (!Number.isFinite(pickup.lat) || !Number.isFinite(pickup.lng)) {
+      return handleResponse(res, 400, "Pickup location missing");
+    }
+    if (!Number.isFinite(drop.lat) || !Number.isFinite(drop.lng)) {
+      return handleResponse(res, 400, "Drop location missing");
+    }
+
+    const origin = { lat: originLat, lng: originLng };
+    const dest = phase === "drop" || phase === "full" ? drop : pickup;
+
+    const route = await getCachedRoute(origin, dest, "driving", null, phase);
+    return handleResponse(res, 200, "Route", { ...route, destination: dest });
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }

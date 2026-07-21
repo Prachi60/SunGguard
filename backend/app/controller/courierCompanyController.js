@@ -1,5 +1,9 @@
 import CourierCompany from "../models/courierCompany.js";
 import handleResponse from "../utils/helper.js";
+import {
+  parseCourierLocation,
+  validateCourierLocation,
+} from "../utils/courierLocation.js";
 
 export const adminListCourierCompanies = async (req, res) => {
   try {
@@ -23,9 +27,15 @@ export const adminCreateCourierCompany = async (req, res) => {
       ? Number(req.body.sortOrder)
       : 0;
     const isActive = req.body?.isActive !== false && req.body?.isActive !== "false";
+    const location = parseCourierLocation(req.body);
 
     if (!name) {
       return handleResponse(res, 400, "Courier company name is required");
+    }
+
+    const locationError = validateCourierLocation(location);
+    if (locationError) {
+      return handleResponse(res, 400, locationError);
     }
 
     const existing = await CourierCompany.findOne({
@@ -41,6 +51,7 @@ export const adminCreateCourierCompany = async (req, res) => {
       companyCharge,
       sortOrder,
       isActive,
+      location,
     });
 
     return handleResponse(res, 201, "Courier company created", company);
@@ -86,6 +97,34 @@ export const adminUpdateCourierCompany = async (req, res) => {
     }
     if (req.body?.isActive !== undefined) {
       company.isActive = req.body.isActive === true || req.body.isActive === "true";
+    }
+
+    const hasLocationUpdate =
+      req.body?.location !== undefined ||
+      [
+        "flatNo",
+        "address",
+        "landmark",
+        "city",
+        "state",
+        "pincode",
+        "fullAddress",
+        "lat",
+        "lng",
+        "phone",
+      ].some((field) => req.body?.[field] !== undefined);
+
+    if (hasLocationUpdate) {
+      const nextLocation = parseCourierLocation({
+        ...(company.location?.toObject?.() || company.location || {}),
+        ...(req.body?.location || {}),
+        ...req.body,
+      });
+      const locationError = validateCourierLocation(nextLocation);
+      if (locationError) {
+        return handleResponse(res, 400, locationError);
+      }
+      company.location = nextLocation;
     }
 
     await company.save();

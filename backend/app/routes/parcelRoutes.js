@@ -17,6 +17,7 @@ import {
   adminGetRiders,
   riderGetAssignedParcels,
   riderGetAvailableParcels,
+  getParcelRoute,
   riderAcceptParcel,
   riderRejectParcel,
   riderUpdateStatus,
@@ -87,6 +88,7 @@ router.delete(
    DELIVERY PARTNER API ROUTES
    ========================================================================== */
 router.get("/rider/assigned", verifyToken, allowRoles("delivery"), riderGetAssignedParcels);
+router.get("/rider/route/:parcelId", verifyToken, allowRoles("delivery"), getParcelRoute);
 router.get("/rider/available", verifyToken, allowRoles("delivery"), riderGetAvailableParcels);
 router.post("/rider/accept/:parcelId", verifyToken, allowRoles("delivery"), riderAcceptParcel);
 router.post("/rider/reject/:parcelId", verifyToken, allowRoles("delivery"), riderRejectParcel);

@@ -42,6 +42,19 @@ const courierCompanySchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Branch / drop-off office address for riders and parcel booking. */
+    location: {
+      flatNo: { type: String, trim: true, default: "" },
+      address: { type: String, trim: true, default: "" },
+      landmark: { type: String, trim: true, default: "" },
+      city: { type: String, trim: true, default: "" },
+      state: { type: String, trim: true, default: "" },
+      pincode: { type: String, trim: true, default: "" },
+      fullAddress: { type: String, trim: true, default: "" },
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      phone: { type: String, trim: true, default: "" },
+    },
   },
   { timestamps: true },
 );
@@ -64,7 +77,7 @@ courierCompanySchema.statics.listActiveForBooking = async function () {
   await this.ensureDefaults();
   return this.find({ isActive: true })
     .sort({ sortOrder: 1, name: 1 })
-    .select("_id name platformCharge companyCharge")
+    .select("_id name platformCharge companyCharge location")
     .lean();
 };
 

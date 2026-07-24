@@ -384,6 +384,32 @@ const orderSchema = new mongoose.Schema(
       enum: ["customer", "seller", "admin", "system"],
     },
     cancelReason: String,
+    /**
+     * Online-paid cancel refund gate:
+     * - none: no pending cancel refund request
+     * - requested: customer asked to cancel; waiting for admin
+     * - approved: admin approved; order cancelled + wallet credited
+     * - rejected: admin rejected; order continues
+     */
+    cancelRequestStatus: {
+      type: String,
+      enum: ["none", "requested", "approved", "rejected"],
+      default: "none",
+      index: true,
+    },
+    cancelRequestedAt: {
+      type: Date,
+      default: null,
+    },
+    cancelRefundApprovedAt: {
+      type: Date,
+      default: null,
+    },
+    cancelRefundApprovedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null,
+    },
     deviceType: {
       type: String,
       enum: ["Mobile", "Desktop", "Tablet"],

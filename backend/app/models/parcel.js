@@ -29,6 +29,18 @@ const packageDetailsSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  /** Customer segment: 'personal' or 'business' (optional). */
+  packageSegment: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  /** Category chosen within the selected segment (optional). */
+  packageCategory: {
+    type: String,
+    trim: true,
+    default: "",
+  },
   weight: {
     type: Number,
     required: true,
@@ -66,6 +78,13 @@ const parcelSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    /** Delivery speed chosen by customer: normal | express */
+    deliverySpeed: {
+      type: String,
+      enum: ["normal", "express"],
+      default: "normal",
+      index: true,
+    },
     /** Destination city where the parcel should go. */
     destinationCity: {
       type: String,
@@ -77,10 +96,10 @@ const parcelSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    /** When delivery boy can come: today | 7_days | 15_days | 30_days | specific */
+    /** When delivery boy can come: today | 7_days | 15_days | 30_days | custom_days | specific */
     pickupWindow: {
       type: String,
-      enum: ["today", "7_days", "15_days", "30_days", "specific"],
+      enum: ["today", "7_days", "15_days", "30_days", "custom_days", "specific"],
       default: "today",
     },
     /** Number of days in window (0 for today, null for specific date). */
@@ -109,6 +128,7 @@ const parcelSchema = new mongoose.Schema(
       courierCharge: { type: Number, default: 0 },
       platformCharge: { type: Number, default: 0 },
       companyCharge: { type: Number, default: 0 },
+      expressCharge: { type: Number, default: 0 },
       /** Per-day fare before multi-day multiplier. */
       dailyFare: { type: Number, default: 0 },
       /** Number of days charged (today=1, 7/15/30, or till-date span). */
@@ -130,9 +150,51 @@ const parcelSchema = new mongoose.Schema(
       enum: ["UPI", "CARD", "WALLET", "COD"],
       required: true,
     },
+    /**
+     * COD cash chain:
+     * Customer → Rider (collect) → Seller (handover) → Admin (Razorpay remit)
+     */
+    codSettlement: {
+      collectAmount: { type: Number, default: 0 },
+      status: {
+        type: String,
+        enum: [
+          "NOT_APPLICABLE",
+          "COLLECT_PENDING",
+          "RIDER_HOLDING",
+          "WITH_SELLER",
+          "REMITTED_TO_ADMIN",
+        ],
+        default: "NOT_APPLICABLE",
+        index: true,
+      },
+      riderCollectedAt: { type: Date, default: null },
+      handedToSellerAt: { type: Date, default: null },
+      sellerConfirmedAt: { type: Date, default: null },
+      remittedAt: { type: Date, default: null },
+      sellerRazorpayOrderId: { type: String, default: null },
+      sellerRazorpayPaymentId: { type: String, default: null },
+    },
+    /** Razorpay order id for UPI/online parcel payments. */
+    razorpayOrderId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    razorpayPaymentId: {
+      type: String,
+      default: null,
+    },
     deliveryPartnerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Delivery",
+      default: null,
+      index: true,
+    },
+    /** Parcel hub seller who auto-accepts within their service radius. */
+    sellerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seller",
       default: null,
       index: true,
     },

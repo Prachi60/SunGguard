@@ -15,12 +15,14 @@ import {
   ChevronDown,
   Building2,
   CalendarDays,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { parcelApi } from '../services/parcelApi';
 import MapPicker from '../../../shared/components/MapPicker';
 import { composeCourierFullAddress } from '../../admin/utils/courierLocation';
 import { useAuth } from '@core/context/AuthContext';
+import { openParcelRazorpayCheckout } from '../utils/parcelRazorpay';
 
 const FALLBACK_COURIER_COMPANIES = [
   { id: '', name: 'Blue Dart', platformCharge: 0, companyCharge: 0 },
@@ -58,12 +60,53 @@ const DESTINATION_CITIES = [
   { name: 'Other', lat: 20.5937, lng: 78.9629 },
 ];
 
-const PICKUP_WINDOWS = [
-  { value: 'today', label: 'Today only', days: 0, helper: 'Book for today' },
-  { value: '7_days', label: 'For 7 days', days: 7, helper: 'Book daily for 7 days' },
-  { value: '15_days', label: 'For 15 days', days: 15, helper: 'Book daily for 15 days' },
-  { value: '30_days', label: 'For 30 days', days: 30, helper: 'Book daily for 30 days' },
-  { value: 'specific', label: 'Till a date', days: null, helper: 'Book until a specific date' },
+const BOOKING_DURATION_MODES = [
+  { value: 'one_day', label: 'One day', helper: 'Book for today only' },
+  { value: 'custom_days', label: 'Custom days', helper: 'Enter number of days' },
+  { value: 'by_date', label: 'Select by date', helper: 'Pick booking end date' },
+];
+
+const MAX_BOOKING_DAYS = 30;
+
+const resolveBookingDurationParams = (mode, { customDaysInput, preferredPickupDate }) => {
+  if (mode === 'one_day') {
+    return {
+      pickupWindow: 'today',
+      pickupWindowDays: 0,
+      preferredPickupDate: todayDateInputValue(),
+    };
+  }
+  if (mode === 'custom_days') {
+    const days = Math.min(
+      MAX_BOOKING_DAYS,
+      Math.max(2, parseInt(String(customDaysInput).trim(), 10) || 0),
+    );
+    return {
+      pickupWindow: 'custom_days',
+      pickupWindowDays: days,
+      preferredPickupDate: addDaysToDateInput(days),
+    };
+  }
+  return {
+    pickupWindow: 'specific',
+    pickupWindowDays: null,
+    preferredPickupDate,
+  };
+};
+
+const formatBookingDate = (dateInput) =>
+  new Date(dateInput).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+
+/** Hidden from booking UI; backend still requires a package type. */
+const DEFAULT_PACKAGE_TYPE = 'other';
+
+const DELIVERY_SPEED_OPTIONS = [
+  { value: 'normal', label: 'Normal', timeLabel: '30 min' },
+  { value: 'express', label: 'Express', timeLabel: '10 min' },
 ];
 
 const addDaysToDateInput = (days) => {
@@ -81,7 +124,7 @@ const todayDateInputValue = () => addDaysToDateInput(0);
 const getCityCoords = (cityName) =>
   DESTINATION_CITIES.find((c) => c.name === cityName) || null;
 
-const formatInr = (value) => `₹${Number(value || 0).toFixed(0)}`;
+const formatInr = (value) => `₹${Number(value || 0).toFixed(2)}`;
 
 /** Keeps dropdown menus inside the viewport (flips up + scrolls). */
 const useInScreenMenu = (open, onClose, itemCount = 1, estimatedItemHeight = 48) => {
@@ -147,7 +190,7 @@ const useInScreenMenu = (open, onClose, itemCount = 1, estimatedItemHeight = 48)
   return { rootRef, listRef, menuStyle };
 };
 
-const CourierCompanySelect = ({ companies, value, onChange }) => {
+const CourierCompanySelect = ({ companies, value, onChange, hideSelectedPlatformCharge = false }) => {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const { rootRef, listRef, menuStyle } = useInScreenMenu(
@@ -178,9 +221,11 @@ const CourierCompanySelect = ({ companies, value, onChange }) => {
         {selected ? (
           <span className="flex items-center justify-between gap-2 pr-1">
             <span className="font-semibold text-slate-800 truncate">{selected.name}</span>
-            <span className="shrink-0 text-[11px] font-black text-primary">
-              Platform {formatInr(selected.platformCharge)}
-            </span>
+            {!hideSelectedPlatformCharge && !selected.isOther && (
+              <span className="shrink-0 text-[11px] font-black text-primary">
+                Platform {formatInr(selected.platformCharge)}
+              </span>
+            )}
           </span>
         ) : (
           <span className="text-slate-400">Select courier company</span>
@@ -238,11 +283,13 @@ const CourierCompanySelect = ({ companies, value, onChange }) => {
                         isSelected ? 'text-primary' : 'text-slate-800'
                       }`}
                     >
-                      {company.name}
+                      {company.isOther ? 'Other (type company name)' : company.name}
                     </span>
-                    <span className="text-[11px] font-black text-primary shrink-0">
-                      Platform {formatInr(platformFee)}
-                    </span>
+                    {!company.isOther && (
+                      <span className="text-[11px] font-black text-primary shrink-0">
+                        Platform {formatInr(platformFee)}
+                      </span>
+                    )}
                   </div>
                 </button>
               );
@@ -380,28 +427,58 @@ const ParcelDeliveryPage = () => {
     });
   };
 
-  const [packageTypes, setPackageTypes] = useState([
-    { value: "document", label: "Document / Paper" },
-    { value: "food", label: "Food Items" },
-    { value: "clothes", label: "Clothes / Fabric" },
-    { value: "electronics", label: "Electronics" },
-    { value: "other", label: "Other Packets" },
-  ]);
   const [maxWeightKg, setMaxWeightKg] = useState(1);
+  const [expressCharge, setExpressCharge] = useState(0);
   const [packageDescriptionPlaceholder, setPackageDescriptionPlaceholder] = useState(
     "E.g. keys, critical document papers...",
   );
-  const [packageType, setPackageType] = useState("document");
+  const [packageCategories, setPackageCategories] = useState([]);
+  const [packageSegment, setPackageSegment] = useState(""); // 'personal' | 'business'
+  const [packageCategory, setPackageCategory] = useState("");
   /** Display value only — do not clamp while typing so whole numbers work. */
   const [weightInput, setWeightInput] = useState("0.2");
   const [weightUnit, setWeightUnit] = useState("kg"); // 'kg' | 'gm'
   const [description, setDescription] = useState('');
+  const [deliverySpeed, setDeliverySpeed] = useState('normal');
   const [paymentMethod, setPaymentMethod] = useState('COD');
   const [courierCompanies, setCourierCompanies] = useState(FALLBACK_COURIER_COMPANIES);
   const [courierCompanyId, setCourierCompanyId] = useState('');
+  const [customCourierName, setCustomCourierName] = useState('');
+  const [customCourierNameSaved, setCustomCourierNameSaved] = useState(false);
   const [destinationCity, setDestinationCity] = useState('');
-  const [pickupWindow, setPickupWindow] = useState('today');
+  const [bookingDurationMode, setBookingDurationMode] = useState('one_day');
+  const [customDaysInput, setCustomDaysInput] = useState('7');
   const [preferredPickupDate, setPreferredPickupDate] = useState(todayDateInputValue());
+
+  const bookingDurationParams = useMemo(
+    () =>
+      resolveBookingDurationParams(bookingDurationMode, {
+        customDaysInput,
+        preferredPickupDate,
+      }),
+    [bookingDurationMode, customDaysInput, preferredPickupDate],
+  );
+
+  const selectedBookingMode = useMemo(
+    () =>
+      BOOKING_DURATION_MODES.find((m) => m.value === bookingDurationMode) ||
+      BOOKING_DURATION_MODES[0],
+    [bookingDurationMode],
+  );
+
+  const parsedCustomDays = useMemo(() => {
+    const n = parseInt(String(customDaysInput).trim(), 10);
+    return Number.isFinite(n) ? n : 0;
+  }, [customDaysInput]);
+
+  const handleBookingDurationChange = (value) => {
+    setBookingDurationMode(value);
+    if (value === 'one_day') {
+      setPreferredPickupDate(todayDateInputValue());
+    } else if (value === 'by_date' && (!preferredPickupDate || preferredPickupDate < todayDateInputValue())) {
+      setPreferredPickupDate(todayDateInputValue());
+    }
+  };
 
   const selectedCity = useMemo(
     () => (destinationCity ? getCityCoords(destinationCity) : null),
@@ -413,25 +490,32 @@ const ParcelDeliveryPage = () => {
     [courierCompanies, courierCompanyId],
   );
 
-  const courierCompany = selectedCourier?.name || '';
+  const isOtherCourier = selectedCourier?.isOther === true;
 
-  const selectedPickupWindow = useMemo(
-    () => PICKUP_WINDOWS.find((w) => w.value === pickupWindow) || PICKUP_WINDOWS[0],
-    [pickupWindow],
-  );
-
-  const handlePickupWindowChange = (value) => {
-    setPickupWindow(value);
-    const option = PICKUP_WINDOWS.find((w) => w.value === value);
-    if (!option) return;
-    if (option.value !== 'specific' && option.days != null) {
-      setPreferredPickupDate(addDaysToDateInput(option.days));
-    } else if (!preferredPickupDate || preferredPickupDate < todayDateInputValue()) {
-      setPreferredPickupDate(todayDateInputValue());
+  useEffect(() => {
+    if (!isOtherCourier) {
+      setCustomCourierName('');
+      setCustomCourierNameSaved(false);
     }
-  };
+  }, [courierCompanyId, isOtherCourier]);
 
-  // Always in KG for fare API / booking payload.
+  const saveCustomCourierName = useCallback(() => {
+    const name = customCourierName.trim();
+    if (!name) {
+      toast.error('Please enter courier company name');
+      return false;
+    }
+    setCustomCourierName(name);
+    setCustomCourierNameSaved(true);
+    return true;
+  }, [customCourierName]);
+
+  // For the "Other" option, the shipping company name is what the customer types.
+  const courierCompany = isOtherCourier
+    ? (customCourierNameSaved ? customCourierName.trim() : '')
+    : selectedCourier?.name || '';
+
+  // Fare Estimation
   const weightKg = useMemo(() => {
     const n = parseFloat(String(weightInput).trim());
     if (!Number.isFinite(n) || n <= 0) return 0;
@@ -440,6 +524,25 @@ const ParcelDeliveryPage = () => {
   }, [weightInput, weightUnit]);
   // Alias so any leftover `weight` references don't crash the page.
   const weight = weightKg;
+
+  // Segments available (only those that actually have active categories).
+  const availableSegments = useMemo(() => {
+    const set = new Set(
+      (packageCategories || []).map((c) => (c.segment === "business" ? "business" : "personal")),
+    );
+    return [
+      { value: "personal", label: "Personal" },
+      { value: "business", label: "Business" },
+    ].filter((s) => set.has(s.value));
+  }, [packageCategories]);
+
+  // Categories that belong to the currently selected segment.
+  const segmentCategories = useMemo(() => {
+    if (!packageSegment) return [];
+    return (packageCategories || []).filter(
+      (c) => (c.segment === "business" ? "business" : "personal") === packageSegment,
+    );
+  }, [packageCategories, packageSegment]);
 
   // Fare Estimation
   const [fareEstimation, setFareEstimation] = useState(null);
@@ -453,14 +556,10 @@ const ParcelDeliveryPage = () => {
       const response = await parcelApi.getBookingConfig();
       if (!response.data?.success) return;
       const cfg = response.data.result || {};
-      const types = Array.isArray(cfg.packageTypes) ? cfg.packageTypes : [];
-      if (types.length) {
-        setPackageTypes(types);
-        setPackageType((prev) =>
-          types.some((t) => t.value === prev) ? prev : types[0].value,
-        );
-      }
+      const categories = Array.isArray(cfg.packageCategories) ? cfg.packageCategories : [];
+      setPackageCategories(categories);
       if (cfg.maxWeightKg != null) setMaxWeightKg(Number(cfg.maxWeightKg) || 1);
+      setExpressCharge(Math.max(0, Number(cfg.expressCharge) || 0));
       if (cfg.packageDescriptionPlaceholder) {
         setPackageDescriptionPlaceholder(cfg.packageDescriptionPlaceholder);
       }
@@ -471,6 +570,8 @@ const ParcelDeliveryPage = () => {
             name: c.name,
             platformCharge: Number(c.platformCharge) || 0,
             companyCharge: Number(c.companyCharge) || 0,
+            location: c.location || null,
+            isOther: c.isOther === true,
           })),
         );
       }
@@ -483,39 +584,56 @@ const ParcelDeliveryPage = () => {
     fetchBookingConfig();
   }, [fetchBookingConfig]);
 
-  // Handle Fare Calculation when locations, weight, courier, or booking duration change
+  // Keep selected category consistent with the chosen segment.
+  useEffect(() => {
+    if (!packageSegment) {
+      if (packageCategory) setPackageCategory("");
+      return;
+    }
+    if (!segmentCategories.some((c) => c.value === packageCategory)) {
+      setPackageCategory(segmentCategories[0]?.value || "");
+    }
+  }, [packageSegment, segmentCategories, packageCategory]);
+
+  // Handle Fare Calculation when pickup, weight, courier, or booking duration change
   useEffect(() => {
     const calcFare = async () => {
-      if (
-        pickupDetails.lat &&
-        pickupDetails.lng &&
-        selectedCity?.lat &&
-        selectedCity?.lng &&
-        weightKg > 0
-      ) {
+      if (isOtherCourier && !customCourierNameSaved) {
+        setFareEstimation(null);
+        return;
+      }
+      if (bookingDurationMode === 'custom_days' && (parsedCustomDays < 2 || parsedCustomDays > MAX_BOOKING_DAYS)) {
+        setFareEstimation(null);
+        return;
+      }
+      if (pickupDetails.lat && pickupDetails.lng && weightKg > 0) {
         setEstimating(true);
         try {
           const res = await parcelApi.calculateFare({
             pickupLat: pickupDetails.lat,
             pickupLng: pickupDetails.lng,
-            dropLat: selectedCity.lat,
-            dropLng: selectedCity.lng,
             weight: weightKg,
             courierCompanyId: selectedCourier?.id || undefined,
             courierCompany: selectedCourier?.name || undefined,
-            pickupWindow: selectedPickupWindow.value,
-            pickupWindowDays:
-              selectedPickupWindow.value === 'specific' ? null : selectedPickupWindow.days,
-            preferredPickupDate:
-              selectedPickupWindow.value === 'specific'
-                ? preferredPickupDate
-                : addDaysToDateInput(selectedPickupWindow.days),
+            pickupWindow: bookingDurationParams.pickupWindow,
+            pickupWindowDays: bookingDurationParams.pickupWindowDays,
+            preferredPickupDate: bookingDurationParams.preferredPickupDate,
+            deliverySpeed,
           });
           if (res.data && res.data.success) {
-            setFareEstimation(res.data.result);
+            const result = res.data.result || {};
+            setFareEstimation(result);
+            if (result.configuredExpressCharge != null) {
+              setExpressCharge(Math.max(0, Number(result.configuredExpressCharge) || 0));
+            }
           }
         } catch (error) {
-          toast.error("Failed to calculate fare");
+          const msg =
+            error?.response?.data?.message ||
+            error?.message ||
+            "Failed to calculate fare";
+          toast.error(msg);
+          setFareEstimation(null);
         } finally {
           setEstimating(false);
         }
@@ -529,14 +647,17 @@ const ParcelDeliveryPage = () => {
   }, [
     pickupDetails.lat,
     pickupDetails.lng,
-    selectedCity?.lat,
-    selectedCity?.lng,
     weightKg,
     selectedCourier?.id,
     selectedCourier?.name,
-    selectedPickupWindow.value,
-    selectedPickupWindow.days,
-    preferredPickupDate,
+    isOtherCourier,
+    customCourierNameSaved,
+    bookingDurationParams.pickupWindow,
+    bookingDurationParams.pickupWindowDays,
+    bookingDurationParams.preferredPickupDate,
+    bookingDurationMode,
+    parsedCustomDays,
+    deliverySpeed,
   ]);
 
   // Map Selection Confirmation
@@ -591,23 +712,30 @@ const ParcelDeliveryPage = () => {
         `Weight must be between 0 and ${maxWeightKg} KG (or up to ${Math.round(maxWeightKg * 1000)} gm).`,
       );
     }
-    if (!packageTypes.some((t) => t.value === packageType)) {
-      return toast.error("Please select a valid package type.");
-    }
     if (!selectedCourier) {
       return toast.error("Please select a courier company.");
+    }
+    if (isOtherCourier && !customCourierNameSaved) {
+      return toast.error("Please enter courier company name and press Enter.");
     }
     if (!destinationCity || !selectedCity) {
       return toast.error("Please select destination city.");
     }
-    if (!pickupWindow) {
-      return toast.error("Please select how long you want to book for.");
+    if (bookingDurationMode === 'custom_days') {
+      if (parsedCustomDays < 2 || parsedCustomDays > MAX_BOOKING_DAYS) {
+        return toast.error(`Enter between 2 and ${MAX_BOOKING_DAYS} days.`);
+      }
     }
-    if (!preferredPickupDate) {
-      return toast.error("Please select preferred pickup date.");
-    }
-    if (preferredPickupDate < todayDateInputValue()) {
-      return toast.error("Preferred pickup date cannot be in the past.");
+    if (bookingDurationMode === 'by_date') {
+      if (!preferredPickupDate) {
+        return toast.error("Please select booking end date.");
+      }
+      if (preferredPickupDate < todayDateInputValue()) {
+        return toast.error("Booking end date cannot be in the past.");
+      }
+      if (preferredPickupDate > addDaysToDateInput(MAX_BOOKING_DAYS)) {
+        return toast.error(`Booking end date cannot be more than ${MAX_BOOKING_DAYS} days ahead.`);
+      }
     }
 
     const dropAddress = (() => {
@@ -639,10 +767,7 @@ const ParcelDeliveryPage = () => {
       };
     })();
 
-    const resolvedPickupDate =
-      selectedPickupWindow.value === 'specific'
-        ? preferredPickupDate
-        : addDaysToDateInput(selectedPickupWindow.days);
+    const resolvedPickupDate = bookingDurationParams.preferredPickupDate;
 
     setLoading(true);
     try {
@@ -656,33 +781,89 @@ const ParcelDeliveryPage = () => {
         },
         dropAddress,
         packageDetails: {
-          packageType,
+          packageType: DEFAULT_PACKAGE_TYPE,
+          packageSegment,
+          packageCategory,
           weight: weightKg,
           description
         },
-        courierCompany: selectedCourier.name,
+        courierCompany,
         courierCompanyId: selectedCourier.id || undefined,
+        customCourierName: isOtherCourier ? customCourierName.trim() : undefined,
         destinationCity,
-        pickupWindow: selectedPickupWindow.value,
-        pickupWindowDays:
-          selectedPickupWindow.value === 'specific' ? null : selectedPickupWindow.days,
+        pickupWindow: bookingDurationParams.pickupWindow,
+        pickupWindowDays: bookingDurationParams.pickupWindowDays,
         preferredPickupDate: resolvedPickupDate,
+        deliverySpeed,
         paymentMethod
       });
 
       if (response.data && response.data.success) {
-        toast.success("Parcel delivery requested successfully!");
-        const createdParcel = response.data.result;
-        // Reset form
+        const payload = response.data.result || {};
+        const createdParcel = payload.parcel || payload;
+        const razorpay = payload.razorpay;
+        const needsPayment = Boolean(payload.requiresPayment && razorpay?.orderId);
+
+        if (needsPayment) {
+          try {
+            const paymentResult = await openParcelRazorpayCheckout({
+              keyId: razorpay.keyId,
+              orderId: razorpay.orderId,
+              amount: razorpay.amount,
+              currency: razorpay.currency || "INR",
+              name: "SunGguard",
+              description: `Parcel delivery · ₹${createdParcel.fare}`,
+              prefill: {
+                name: pickupDetails.name || user?.name || "",
+                email: user?.email || "",
+                contact: pickupDetails.phone || user?.phone || "",
+              },
+            });
+
+            const verifyRes = await parcelApi.verifyParcelPayment({
+              parcelId: createdParcel._id,
+              ...paymentResult,
+            });
+
+            if (!verifyRes.data?.success) {
+              throw new Error(verifyRes.data?.message || "Payment verification failed");
+            }
+
+            toast.success("Payment successful! Finding a nearby rider...");
+            const paidParcel = verifyRes.data.result?.parcel || createdParcel;
+            navigate(`/parcel/search/${paidParcel._id}`);
+          } catch (payError) {
+            if (payError?.message === "Payment cancelled") {
+              toast.info("Payment cancelled. You can retry from parcel history.");
+            } else {
+              toast.error(
+                payError?.response?.data?.message ||
+                  payError?.message ||
+                  "Payment failed. Please try again.",
+              );
+            }
+            return;
+          }
+        } else {
+          toast.success("Parcel delivery requested successfully!");
+          navigate(`/parcel/search/${createdParcel._id}`);
+        }
+
+        // Reset form after successful book / paid UPI
         setDescription('');
+        setPackageSegment('');
+        setPackageCategory('');
         setCourierCompanyId('');
+        setCustomCourierName('');
+        setCustomCourierNameSaved(false);
+        setDeliverySpeed('normal');
         setDestinationCity('');
-        setPickupWindow('today');
+        setBookingDurationMode('one_day');
+        setCustomDaysInput('7');
         setPreferredPickupDate(todayDateInputValue());
         setWeightInput("0.2");
         setWeightUnit("kg");
         setFareEstimation(null);
-        navigate(`/parcel/search/${createdParcel._id}`);
       } else {
         toast.error(response.data.message || "Failed to create request");
       }
@@ -852,19 +1033,58 @@ const ParcelDeliveryPage = () => {
                   companies={courierCompanies}
                   value={courierCompanyId}
                   onChange={setCourierCompanyId}
+                  hideSelectedPlatformCharge={isOtherCourier && !customCourierNameSaved}
                 />
                 <p className="text-[10px] text-slate-400 font-medium">
                   {selectedCourier
-                    ? (
-                      <>
-                        Platform{' '}
-                        <span className="font-bold text-primary">
-                          {formatInr(selectedCourier.platformCharge)}
-                        </span>
-                      </>
-                    )
+                    ? isOtherCourier
+                      ? customCourierNameSaved
+                        ? 'Courier name saved. Platform charge is included in fare.'
+                        : 'Enter courier company name below and press Enter.'
+                      : (
+                        <>
+                          Platform{' '}
+                          <span className="font-bold text-primary">
+                            {formatInr(selectedCourier.platformCharge)}
+                          </span>
+                        </>
+                      )
                     : 'Which courier company should receive this parcel?'}
                 </p>
+
+                {isOtherCourier && (
+                  <div className="space-y-1 pt-1">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      Courier Company Name
+                    </label>
+                    <div className="relative">
+                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                      <input
+                        type="text"
+                        required
+                        placeholder="Type courier company name"
+                        value={customCourierName}
+                        onChange={(e) => {
+                          setCustomCourierName(e.target.value);
+                          setCustomCourierNameSaved(false);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return;
+                          e.preventDefault();
+                          if (saveCustomCourierName()) {
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-medium">
+                      {customCourierNameSaved
+                        ? 'Courier name saved. Platform charge is now included in fare.'
+                        : 'Enter the name of the courier company you want to use, then press Enter.'}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1 relative z-20">
@@ -885,33 +1105,57 @@ const ParcelDeliveryPage = () => {
                 <label className="text-xs font-bold text-slate-500 uppercase">
                   Book for how long?
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {PICKUP_WINDOWS.map((windowOption) => (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {BOOKING_DURATION_MODES.map((modeOption) => (
                     <button
-                      key={windowOption.value}
+                      key={modeOption.value}
                       type="button"
-                      onClick={() => handlePickupWindowChange(windowOption.value)}
+                      onClick={() => handleBookingDurationChange(modeOption.value)}
                       className={`rounded-xl border-2 px-3 py-2.5 text-left transition-all ${
-                        pickupWindow === windowOption.value
+                        bookingDurationMode === modeOption.value
                           ? 'border-primary bg-primary/5 text-primary'
                           : 'border-slate-100 bg-white text-slate-700 hover:border-slate-200'
                       }`}
                     >
-                      <span className="block text-xs font-black">{windowOption.label}</span>
+                      <span className="block text-xs font-black">{modeOption.label}</span>
                       <span className={`block text-[10px] mt-0.5 font-medium ${
-                        pickupWindow === windowOption.value ? 'text-primary/70' : 'text-slate-400'
+                        bookingDurationMode === modeOption.value ? 'text-primary/70' : 'text-slate-400'
                       }`}>
-                        {windowOption.helper}
+                        {modeOption.helper}
                       </span>
                     </button>
                   ))}
                 </div>
                 <p className="text-[10px] text-slate-400 font-medium">
-                  {selectedPickupWindow.helper}. Choose today, 7, 15, or 30 days.
+                  {selectedBookingMode.helper}. Pick one day, enter custom days, or choose an end date.
                 </p>
               </div>
 
-              {pickupWindow === 'specific' && (
+              {bookingDurationMode === 'custom_days' && (
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Number of days
+                  </label>
+                  <input
+                    type="number"
+                    min={2}
+                    max={MAX_BOOKING_DAYS}
+                    step={1}
+                    required
+                    value={customDaysInput}
+                    onChange={(e) =>
+                      setCustomDaysInput(e.target.value.replace(/\D/g, '').slice(0, 2))
+                    }
+                    placeholder={`2 to ${MAX_BOOKING_DAYS}`}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    Daily pickup available for each day you book (max {MAX_BOOKING_DAYS} days).
+                  </p>
+                </div>
+              )}
+
+              {bookingDurationMode === 'by_date' && (
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase">
                     Book until date
@@ -922,50 +1166,133 @@ const ParcelDeliveryPage = () => {
                       type="date"
                       required
                       min={todayDateInputValue()}
-                      max={addDaysToDateInput(30)}
+                      max={addDaysToDateInput(MAX_BOOKING_DAYS)}
                       value={preferredPickupDate}
                       onChange={(e) => setPreferredPickupDate(e.target.value)}
                       className="w-full rounded-xl border border-slate-200 pl-9 pr-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                     />
                   </div>
-                </div>
-              )}
-
-              {pickupWindow !== 'specific' && (
-                <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 flex items-start gap-2">
-                  <Clock className="text-primary shrink-0 mt-0.5" size={14} />
-                  <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
-                    {selectedPickupWindow.days > 0 ? (
-                      <>
-                        Booking for{' '}
-                        <span className="font-bold text-slate-800">
-                          {selectedPickupWindow.days} days
-                        </span>
-                        {' '}— pickup available every day till{' '}
-                        <span className="font-bold text-slate-800">
-                          {new Date(addDaysToDateInput(selectedPickupWindow.days)).toLocaleDateString('en-IN', {
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric',
-                          })}
-                        </span>
-                        .
-                      </>
-                    ) : (
-                      <>
-                        Booking for{' '}
-                        <span className="font-bold text-slate-800">today only</span>.
-                      </>
-                    )}
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    Pick the last date you want daily pickup service.
                   </p>
                 </div>
               )}
+
+              <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 flex items-start gap-2">
+                <Clock className="text-primary shrink-0 mt-0.5" size={14} />
+                <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                  {bookingDurationMode === 'one_day' && (
+                    <>
+                      Booking for{' '}
+                      <span className="font-bold text-slate-800">one day (today only)</span>.
+                    </>
+                  )}
+                  {bookingDurationMode === 'custom_days' && parsedCustomDays >= 2 && (
+                    <>
+                      Booking for{' '}
+                      <span className="font-bold text-slate-800">{parsedCustomDays} days</span>
+                      {' '}— daily pickup till{' '}
+                      <span className="font-bold text-slate-800">
+                        {formatBookingDate(addDaysToDateInput(parsedCustomDays))}
+                      </span>
+                      .
+                    </>
+                  )}
+                  {bookingDurationMode === 'custom_days' && parsedCustomDays < 2 && (
+                    <>Enter how many days you want to book (minimum 2).</>
+                  )}
+                  {bookingDurationMode === 'by_date' && preferredPickupDate && (
+                    <>
+                      Daily pickup till{' '}
+                      <span className="font-bold text-slate-800">
+                        {formatBookingDate(preferredPickupDate)}
+                      </span>
+                      .
+                    </>
+                  )}
+                </p>
+              </div>
             </div>
           </div>
 
           {/* Package Side & Price */}
           <div className="space-y-6 flex flex-col justify-between">
             <div className="space-y-6">
+              <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
+                <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                  <Zap className="text-primary" size={20} /> Delivery Speed
+                </h2>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {DELIVERY_SPEED_OPTIONS.map((option) => {
+                    const isSelected = deliverySpeed === option.value;
+                    const configuredExpress = Math.max(
+                      Number(expressCharge) || 0,
+                      Number(fareEstimation?.configuredExpressCharge) || 0,
+                    );
+                    const estimatedExpress = Number(fareEstimation?.expressCharge) || 0;
+                    const extraFee =
+                      option.value === 'express'
+                        ? Math.max(configuredExpress, estimatedExpress)
+                        : 0;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          if (deliverySpeed === option.value) return;
+                          const nextSpeed = option.value;
+                          setDeliverySpeed(nextSpeed);
+                          // Instant UI update while API recalculates
+                          setFareEstimation((prev) => {
+                            if (!prev) return prev;
+                            const days = Math.max(1, Number(prev.billableDays) || 1);
+                            const prevExpress = Number(prev.expressCharge) || 0;
+                            const rate = Math.max(
+                              Number(expressCharge) || 0,
+                              Number(prev.configuredExpressCharge) || 0,
+                            );
+                            const nextExpress = nextSpeed === 'express' ? rate : 0;
+                            const delta = (nextExpress - prevExpress) * days;
+                            return {
+                              ...prev,
+                              expressCharge: nextExpress,
+                              dailyFare: Number(
+                                (
+                                  (Number(prev.dailyFare ?? prev.fare) || 0) -
+                                  prevExpress +
+                                  nextExpress
+                                ).toFixed(2),
+                              ),
+                              fare: Number(((Number(prev.fare) || 0) + delta).toFixed(2)),
+                            };
+                          });
+                        }}
+                        className={`rounded-2xl border-2 p-3 text-left transition-all ${
+                          isSelected
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-slate-100 bg-white text-slate-700 hover:border-slate-200'
+                        }`}
+                      >
+                        <span className="block text-sm font-black">{option.label}</span>
+                        <span className={`block text-xs font-bold mt-0.5 ${
+                          isSelected ? 'text-primary' : 'text-slate-700'
+                        }`}>
+                          {option.timeLabel}
+                        </span>
+                        {option.value === 'express' && extraFee > 0 && (
+                          <span className={`block text-[10px] mt-0.5 font-medium ${
+                            isSelected ? 'text-primary/70' : 'text-slate-400'
+                          }`}>
+                            +{formatInr(extraFee)} extra
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Package Details */}
               <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
                 <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
@@ -973,20 +1300,46 @@ const ParcelDeliveryPage = () => {
                 </h2>
 
                 <div className="space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-500 uppercase">Package Type</label>
-                    <select
-                      value={packageType}
-                      onChange={(e) => setPackageType(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm bg-white outline-none focus:border-primary"
-                    >
-                      {packageTypes.map((type) => (
-                        <option key={type.value} value={type.value}>
-                          {type.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {availableSegments.length > 0 && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Sending as
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {availableSegments.map((seg) => (
+                          <button
+                            key={seg.value}
+                            type="button"
+                            onClick={() => setPackageSegment(seg.value)}
+                            className={`rounded-xl border px-3 py-2.5 text-sm font-bold transition ${
+                              packageSegment === seg.value
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                            }`}
+                          >
+                            {seg.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {packageSegment && segmentCategories.length > 0 && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Category</label>
+                      <select
+                        value={packageCategory}
+                        onChange={(e) => setPackageCategory(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm bg-white outline-none focus:border-primary"
+                      >
+                        {segmentCategories.map((cat) => (
+                          <option key={cat.value} value={cat.value}>
+                            {cat.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-500 uppercase">
@@ -1117,18 +1470,32 @@ const ParcelDeliveryPage = () => {
 
               {fareEstimation && (
                 <div className="border-t border-b border-white/10 py-3 space-y-2 text-xs text-slate-300 font-medium">
-                  <div className="flex justify-between">
-                    <span>Base Fare</span>
-                    <span>₹{Number(fareEstimation.baseFare).toFixed(2)}</span>
-                  </div>
+                  {Number(fareEstimation.distanceFare) > 0 && (
+                    <div className="flex justify-between">
+                      <span>
+                        Distance Charge ({fareEstimation.distance} km
+                        {fareEstimation.perKmCharge != null
+                          ? ` × ₹${Number(fareEstimation.perKmCharge).toFixed(2)}`
+                          : ""}
+                        )
+                      </span>
+                      <span>₹{Number(fareEstimation.distanceFare).toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span>Weight Charge ({weightKg} kg)</span>
                     <span>₹{Number(fareEstimation.weightFare).toFixed(2)}</span>
                   </div>
-                  {Number(fareEstimation.platformCharge) > 0 && (
+                  {Number(fareEstimation.platformCharge) > 0 && (!isOtherCourier || customCourierNameSaved) && (
                     <div className="flex justify-between">
                       <span>Platform Charge</span>
                       <span>₹{Number(fareEstimation.platformCharge).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {deliverySpeed === 'express' && (
+                    <div className="flex justify-between">
+                      <span>Express Charge</span>
+                      <span>₹{Number(fareEstimation.expressCharge || 0).toFixed(2)}</span>
                     </div>
                   )}
                   {Number(fareEstimation.billableDays) > 1 && (
@@ -1146,19 +1513,23 @@ const ParcelDeliveryPage = () => {
                 </div>
               )}
 
-              {!pickupDetails.lat || !selectedCity ? (
+              {!pickupDetails.lat ? (
                 <div className="flex items-center gap-2 text-amber-400 bg-amber-500/10 rounded-2xl p-3 text-xs font-semibold">
                   <AlertTriangle size={14} className="shrink-0" />
-                  Please select pickup location and destination city to view distance & fare estimates.
+                  Please select pickup location to view distance & fare estimates.
                 </div>
               ) : null}
 
               <button
                 type="submit"
-                disabled={loading || estimating || !pickupDetails.lat || !selectedCity || !selectedCourier}
+                disabled={loading || estimating || !pickupDetails.lat || !selectedCity || !selectedCourier || (isOtherCourier && !customCourierNameSaved)}
                 className="w-full bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-all"
               >
-                {loading ? 'Processing Book...' : 'Request Delivery'}
+                {loading
+                  ? 'Processing...'
+                  : paymentMethod === 'UPI'
+                    ? 'Pay with UPI & Request'
+                    : 'Request Delivery'}
                 <ArrowRight size={18} />
               </button>
             </div>

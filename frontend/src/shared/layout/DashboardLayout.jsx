@@ -56,6 +56,8 @@ const DashboardLayout = ({ children, navItems, title }) => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [returnDropOtpAlert, setReturnDropOtpAlert] = useState(null); // { orderId, otp, expiresAt }
     const { user, logout, role } = useAuth();
+    const isQuickSeller = user?.isQuickCommerceService !== false;
+    const isParcelSeller = user?.isParcelService === true;
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -153,7 +155,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
     }, [newReturnAlert]);
 
     useEffect(() => {
-        if (role !== 'seller') {
+        if (role !== 'seller' || !isQuickSeller) {
             setSellerOrders([]);
             setOrdersLoading(false);
             return;
@@ -201,11 +203,11 @@ const DashboardLayout = ({ children, navItems, title }) => {
 
         fetchOrdersRef.current = fetchOrders;
         fetchOrders();
-    }, [role]);
+    }, [role, isQuickSeller]);
 
     // Resilient fallback when socket events are missed (tab backgrounded/suspended).
     useEffect(() => {
-        if (role !== 'seller') return undefined;
+        if (role !== 'seller' || !isQuickSeller) return undefined;
 
         const syncOrders = () => {
             if (fetchOrdersRef.current) fetchOrdersRef.current();
@@ -228,7 +230,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
             document.removeEventListener('visibilitychange', onVisible);
             window.removeEventListener('online', onOnline);
         };
-    }, [role]);
+    }, [role, isQuickSeller]);
 
     useEffect(() => {
         if (newOrderAlert || newParcelAlert) {
@@ -251,7 +253,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
     }, [role]);
 
     useEffect(() => {
-        if (role !== 'seller') return undefined;
+        if (role !== 'seller' || !isQuickSeller) return undefined;
         const getToken = createSocketTokenReader(STORAGE_KEYS.AUTH_SELLER);
         getOrderSocket(getToken);
         const unsubscribeSellerNew = onSellerOrderNew(getToken, () => {
@@ -269,7 +271,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
             unsubscribeSellerNew();
             unsubscribeDrop();
         };
-    }, [role]);
+    }, [role, isQuickSeller]);
 
     useEffect(() => {
         if (role !== 'admin') return undefined;
@@ -284,9 +286,22 @@ const DashboardLayout = ({ children, navItems, title }) => {
         };
     }, [role]);
 
+    useEffect(() => {
+        if (role !== 'seller' || !isParcelSeller) return undefined;
+        const getToken = createSocketTokenReader(STORAGE_KEYS.AUTH_SELLER);
+        getOrderSocket(getToken);
+        const unsubscribeParcelNew = onParcelNew(getToken, (parcel) => {
+            console.log("[DashboardLayout] Parcel seller received new booking:", parcel);
+            setNewParcelAlert(parcel);
+        });
+        return () => {
+            unsubscribeParcelNew();
+        };
+    }, [role, isParcelSeller]);
+
     // Single earnings fetch when seller is on earnings/withdrawals/transactions – no duplicate calls
     useEffect(() => {
-        if (role !== 'seller' || !isEarningsRoute(location.pathname)) {
+        if (role !== 'seller' || !isQuickSeller || !isEarningsRoute(location.pathname)) {
             if (!isEarningsRoute(location.pathname)) earningsFetchedRef.current = false;
             return;
         }
@@ -308,7 +323,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
             })
             .catch((err) => console.error("Earnings Fetch Error:", err))
             .finally(() => setEarningsLoading(false));
-    }, [role, location.pathname]);
+    }, [role, isQuickSeller, location.pathname]);
 
     const refreshOrders = () => {
         if (fetchOrdersRef.current) fetchOrdersRef.current();
@@ -575,7 +590,11 @@ const DashboardLayout = ({ children, navItems, title }) => {
                                             stopOrderRingtone();
                                             const parcelId = newParcelAlert._id;
                                             setNewParcelAlert(null);
-                                            navigate(parcelId ? `/admin/parcels?parcelId=${parcelId}` : "/admin/parcels");
+                                            if (role === 'admin') {
+                                                navigate(parcelId ? `/admin/parcels?parcelId=${parcelId}` : "/admin/parcels");
+                                            } else if (role === 'seller') {
+                                                navigate("/seller/orders");
+                                            }
                                         }}
                                         className="flex-1 py-3 px-4 rounded-xl text-center text-xs font-black uppercase tracking-widest bg-primary hover:bg-primary-dark text-white shadow-lg shadow-primary/20 transition-all duration-300"
                                     >

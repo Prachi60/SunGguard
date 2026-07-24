@@ -800,6 +800,25 @@ export async function reverseOrderFinanceOnCancellation(
           },
           { session },
         );
+
+        // Credit the online gateway amount back to the customer wallet
+        // (platform keeps the gateway settlement; customer spends from wallet later).
+        if (order.customer) {
+          await creditWallet({
+            ownerType: OWNER_TYPE.CUSTOMER,
+            ownerId: order.customer,
+            amount: refundAmount,
+            bucket: "available",
+            session,
+            ledgerType: LEDGER_TRANSACTION_TYPE.WALLET_REFUND,
+            ledgerReference: `CXL-ONLINE-${order.orderId}`,
+            ledgerDescription: `Online payment refunded to wallet: ${reason}`,
+            orderId: order._id,
+            paymentMode: "ONLINE",
+            idempotencyKey: `CXL-ONLINE-REFUND-${order._id}`,
+            metadata: { source: "order_cancellation_online" },
+          });
+        }
       }
       order.paymentStatus = ORDER_PAYMENT_STATUS.REFUNDED;
     }

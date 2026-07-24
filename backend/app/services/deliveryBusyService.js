@@ -69,7 +69,7 @@ export async function deliveryPartnerHasActiveJob(deliveryId) {
       returnStatus: { $in: ACTIVE_RETURN },
     }),
     Parcel.exists({
-      rider: oid,
+      deliveryPartnerId: oid,
       status: { $in: ACTIVE_PARCEL },
     }),
   ]);

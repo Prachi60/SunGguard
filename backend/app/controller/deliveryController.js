@@ -22,6 +22,81 @@ import {
   getDeliveryEarnings as getDeliveryEarningsFromService,
   getDeliveryCodCashSummary as getDeliveryCodCashSummaryFromService,
 } from "../services/delivery/deliveryEarningsService.js";
+import Parcel from "../models/parcel.js";
+import ParcelConfig from "../models/parcelConfig.js";
+import { computeRiderParcelEarnings } from "../services/parcelWorkflowService.js";
+
+const PARCEL_ACTIVE_STATUSES = new Set([
+  "REQUESTED",
+  "SEARCHING",
+  "ACCEPTED",
+  "RIDER_ASSIGNED",
+  "PICKUP_REACHED",
+  "PICKED_UP",
+  "OUT_FOR_DELIVERY",
+]);
+
+function mapParcelForDeliveryHistory(parcel, deliveryBoyId, settings) {
+  const riderId = String(deliveryBoyId);
+  const assignedToMe =
+    parcel.deliveryPartnerId != null &&
+    String(parcel.deliveryPartnerId?._id || parcel.deliveryPartnerId) === riderId;
+  const rejectedByMe =
+    !assignedToMe &&
+    Array.isArray(parcel.skippedBy) &&
+    parcel.skippedBy.some((id) => String(id) === riderId);
+
+  const status = rejectedByMe ? "REJECTED" : String(parcel.status || "REQUESTED").toUpperCase();
+  const sellerDoc =
+    parcel.sellerId && typeof parcel.sellerId === "object" ? parcel.sellerId : null;
+  const customerDoc =
+    parcel.customerId && typeof parcel.customerId === "object" ? parcel.customerId : null;
+
+  const earnings = assignedToMe
+    ? computeRiderParcelEarnings(parcel, settings)
+    : 0;
+
+  return {
+    kind: "parcel",
+    _id: parcel._id,
+    orderId: `PCL-${String(parcel._id).slice(-6).toUpperCase()}`,
+    status: status.toLowerCase(),
+    workflowStatus: status,
+    historyRole: rejectedByMe ? "rejected" : assignedToMe ? "assigned" : "related",
+    createdAt: parcel.createdAt,
+    updatedAt: parcel.updatedAt,
+    customer: customerDoc
+      ? { name: customerDoc.name, phone: customerDoc.phone }
+      : {
+          name: parcel.pickupAddress?.name || "Customer",
+          phone: parcel.pickupAddress?.phone || "",
+        },
+    seller: {
+      shopName: sellerDoc?.shopName || sellerDoc?.name || "Parcel hub",
+      address: sellerDoc?.address || "",
+    },
+    pickupAddress: parcel.pickupAddress,
+    dropAddress: parcel.dropAddress,
+    fare: Number(parcel.fare) || 0,
+    distance: Number(parcel.distance) || 0,
+    paymentMethod: parcel.paymentMethod,
+    deliverySpeed: parcel.deliverySpeed,
+    pricing: { total: Number(parcel.fare) || 0 },
+    earnings,
+    riderEarnings: earnings,
+  };
+}
+
+function parcelMatchesHistoryFilter(item, normalized) {
+  const status = String(item.workflowStatus || item.status || "").toUpperCase();
+  if (normalized === "all") return true;
+  if (normalized === "delivered") return status === "DELIVERED";
+  if (normalized === "cancelled") return status === "CANCELLED";
+  if (normalized === "rejected") return status === "REJECTED" || item.historyRole === "rejected";
+  if (normalized === "active") return PARCEL_ACTIVE_STATUSES.has(status);
+  if (normalized === "returns") return false;
+  return true;
+}
 
 /* ===============================
    GET DELIVERY DASHBOARD STATS
@@ -260,6 +335,23 @@ export const getMyDeliveryOrders = async (req, res) => {
                     },
                 ],
             };
+        } else if (normalized === "active") {
+            query = {
+                $and: [
+                    assignedToPartner,
+                    {
+                        $nor: [
+                            { status: "delivered" },
+                            { status: "cancelled" },
+                            { workflowStatus: WORKFLOW_STATUS.DELIVERED },
+                            { workflowStatus: WORKFLOW_STATUS.CANCELLED },
+                        ],
+                    },
+                ],
+            };
+        } else if (normalized === "rejected") {
+            // QC orders do not persist rider rejects on Order; parcels handled below.
+            query = { _id: { $exists: false } };
         } else if (normalized === "returns") {
             query = {
                 returnStatus: { $ne: "none" },
@@ -269,17 +361,54 @@ export const getMyDeliveryOrders = async (req, res) => {
                 ],
             };
         } else {
+            // all — every status for this rider
             query = assignedToPartner;
         }
 
-        const orders = await Order.find(query)
-            .sort({ createdAt: -1 })
-            .limit(100)
-            .populate("seller", "shopName address")
-            .populate("customer", "name phone")
-            .lean();
+        const [orders, parcelDocs, parcelSettings] = await Promise.all([
+            Order.find(query)
+                .sort({ createdAt: -1 })
+                .limit(100)
+                .populate("seller", "shopName address")
+                .populate("customer", "name phone")
+                .lean(),
+            Parcel.find({
+                $or: [
+                    { deliveryPartnerId: deliveryBoyId },
+                    { skippedBy: deliveryBoyId },
+                ],
+            })
+                .select("-otp")
+                .populate("customerId", "name phone")
+                .populate("sellerId", "name shopName phone address")
+                .sort({ createdAt: -1 })
+                .limit(100)
+                .lean(),
+            ParcelConfig.getSearchSettings().catch(() => ({
+                riderBaseFareSharePercent: 80,
+                riderDistanceFareSharePercent: 80,
+                riderSharePercent: 80,
+            })),
+        ]);
 
-        return handleResponse(res, 200, "Delivery orders fetched", orders);
+        const orderItems = (orders || []).map((order) => ({
+            ...order,
+            kind: "order",
+            earnings:
+                order.riderEarnings != null
+                    ? Number(order.riderEarnings)
+                    : Math.round((Number(order.pricing?.total) || 0) * 0.1),
+        }));
+
+        const parcelItems = (parcelDocs || [])
+            .map((p) => mapParcelForDeliveryHistory(p, deliveryBoyId, parcelSettings))
+            .filter((item) => parcelMatchesHistoryFilter(item, normalized));
+
+        const merged = [...orderItems, ...parcelItems].sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+
+        return handleResponse(res, 200, "Delivery orders fetched", merged.slice(0, 150));
     } catch (error) {
         return handleResponse(res, 500, error.message);
     }

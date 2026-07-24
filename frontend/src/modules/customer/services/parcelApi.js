@@ -5,6 +5,7 @@ export const parcelApi = {
   // Customer APIs
   calculateFare: (data) => axiosInstance.post("/parcel/calculate-fare", data),
   createParcel: (data) => axiosInstance.post("/parcel/create", data),
+  verifyParcelPayment: (data) => axiosInstance.post("/parcel/verify-payment", data),
   getBookingConfig: () =>
     getWithDedupe("/parcel/booking-config", {}, { ttl: 15000 }),
   getHistory: () => axiosInstance.get("/parcel/history"),
@@ -27,14 +28,14 @@ export const parcelApi = {
   // Rider/Delivery Partner APIs
   riderGetAssigned: (options = {}) =>
     getWithDedupe("/parcel/rider/assigned", {}, {
-      ttl: options.ttl ?? 12000,
+      ttl: options.ttl ?? 30000,
       forceRefresh: options.forceRefresh ?? false,
     }),
   getParcelRoute: (parcelId, params, config = {}) =>
     axiosInstance.get(`/parcel/rider/route/${parcelId}`, { params, ...config }),
   riderGetAvailable: (options = {}) =>
     getWithDedupe("/parcel/rider/available", {}, {
-      ttl: options.ttl ?? 8000,
+      ttl: options.ttl ?? 20000,
       forceRefresh: options.forceRefresh ?? false,
     }),
   riderAcceptParcel: (parcelId, idempotencyKey) =>

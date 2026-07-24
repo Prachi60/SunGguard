@@ -20,8 +20,13 @@ import {
   customerCancelV2,
   startReturnPickupBroadcast,
   removeReturnPickupTimeoutJob,
+  removeSellerTimeoutJob,
 } from "../services/orderWorkflowService.js";
-import { markDeliveryPartnerBusy } from "../services/deliveryBusyService.js";
+import { compensateOrderCancellation } from "../services/orderCompensation.js";
+import {
+  markDeliveryPartnerBusy,
+  syncDeliveryPartnerBusyFlag,
+} from "../services/deliveryBusyService.js";
 import { applyDeliveredSettlement } from "../services/orderSettlement.js";
 import {
   freezeFinancialSnapshot,
@@ -45,6 +50,7 @@ import { placeOrderAtomic } from "../services/orderPlacementService.js";
 import { emitNotificationEvent } from "../modules/notifications/notification.emitter.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
 import {
+  emitOrderStatusUpdate,
   emitDeliveryBroadcastForSeller,
   retractDeliveryBroadcastForOrder,
   emitToSeller,
@@ -310,7 +316,15 @@ export const cancelOrder = async (req, res) => {
           order.orderId,
           reason,
         );
-        return handleResponse(res, 200, "Order cancelled successfully", updated);
+        const pendingRefund = updated.cancelRequestStatus === "requested";
+        return handleResponse(
+          res,
+          200,
+          pendingRefund
+            ? "Cancel request submitted. Admin approval will credit your online payment to wallet."
+            : "Order cancelled successfully",
+          updated,
+        );
       } catch (e) {
         return handleResponse(res, e.statusCode || 500, e.message);
       }
@@ -321,6 +335,27 @@ export const cancelOrder = async (req, res) => {
         res,
         400,
         "Order cannot be cancelled after confirmation",
+      );
+    }
+
+    const onlinePaid =
+      String(order.paymentMode || "").toUpperCase() === "ONLINE" &&
+      (order.financeFlags?.onlinePaymentCaptured === true ||
+        String(order.paymentStatus || "").toUpperCase() === "PAID");
+
+    if (onlinePaid) {
+      if (order.cancelRequestStatus === "requested") {
+        return handleResponse(res, 409, "Cancel request already pending admin approval");
+      }
+      order.cancelRequestStatus = "requested";
+      order.cancelRequestedAt = new Date();
+      order.cancelReason = reason || "Cancel requested by user";
+      await order.save();
+      return handleResponse(
+        res,
+        200,
+        "Cancel request submitted. Admin approval will credit your online payment to wallet.",
+        order,
       );
     }
 
@@ -362,6 +397,154 @@ export const cancelOrder = async (req, res) => {
     return handleResponse(res, 200, "Order cancelled successfully", order);
   } catch (error) {
     return handleResponse(res, 500, error.message);
+  }
+};
+
+/**
+ * Admin approves online cancel request → cancel order + credit customer wallet.
+ */
+export const approveCancelRefund = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return handleResponse(res, 403, "Only admin can approve cancel refunds");
+    }
+
+    const { orderId } = req.params;
+    const orderKey = orderMatchQueryFromRouteParam(orderId);
+    if (!orderKey) {
+      return handleResponse(res, 404, "Order not found");
+    }
+
+    const order = await Order.findOne(orderKey);
+    if (!order) {
+      return handleResponse(res, 404, "Order not found");
+    }
+
+    if (order.cancelRequestStatus !== "requested") {
+      return handleResponse(res, 400, "No pending cancel refund request for this order");
+    }
+
+    if (String(order.status).toLowerCase() === "cancelled" ||
+        order.workflowStatus === WORKFLOW_STATUS.CANCELLED) {
+      // Already cancelled — just complete wallet refund if needed.
+      order.cancelRequestStatus = "approved";
+      order.cancelRefundApprovedAt = new Date();
+      order.cancelRefundApprovedBy = req.user.id;
+      await order.save();
+      if (order.paymentBreakdown?.grandTotal != null) {
+        await reverseOrderFinanceOnCancellation(order._id, {
+          actorId: req.user.id,
+          reason: order.cancelReason || "Admin approved cancel refund to wallet",
+        });
+      }
+      return handleResponse(res, 200, "Cancel refund approved. Amount credited to customer wallet.", order);
+    }
+
+    const updated = await Order.findOneAndUpdate(
+      {
+        _id: order._id,
+        cancelRequestStatus: "requested",
+      },
+      {
+        $set: {
+          workflowStatus: WORKFLOW_STATUS.CANCELLED,
+          status: "cancelled",
+          orderStatus: "cancelled",
+          cancelledBy: "admin",
+          cancelRequestStatus: "approved",
+          cancelRefundApprovedAt: new Date(),
+          cancelRefundApprovedBy: req.user.id,
+          cancelReason: order.cancelReason || "Admin approved cancel refund to wallet",
+        },
+      },
+      { new: true },
+    );
+
+    if (!updated) {
+      return handleResponse(res, 409, "Unable to approve cancel request");
+    }
+
+    if (updated.orderId) {
+      await removeSellerTimeoutJob(updated.orderId).catch(() => {});
+    }
+
+    await compensateOrderCancellation(updated, updated.orderId, {
+      actorId: req.user.id,
+      reason: updated.cancelReason || "Admin approved cancel refund to wallet",
+    });
+
+    emitOrderStatusUpdate(
+      updated.orderId,
+      { workflowStatus: WORKFLOW_STATUS.CANCELLED, cancelRequestStatus: "approved" },
+      updated.customer,
+    );
+    emitNotificationEvent(NOTIFICATION_EVENTS.ORDER_CANCELLED, {
+      orderId: updated.orderId,
+      customerId: updated.customer,
+      userId: updated.customer,
+      sellerId: updated.seller,
+      customerMessage:
+        "Your cancel request was approved. Online payment has been credited to your wallet.",
+      sellerMessage: `Order #${updated.orderId} cancelled by admin (wallet refund).`,
+    });
+
+    return handleResponse(
+      res,
+      200,
+      "Cancel approved. Online payment credited to customer wallet.",
+      updated,
+    );
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+/**
+ * Admin rejects customer cancel request — order continues.
+ */
+export const rejectCancelRequest = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return handleResponse(res, 403, "Only admin can reject cancel requests");
+    }
+
+    const { orderId } = req.params;
+    const orderKey = orderMatchQueryFromRouteParam(orderId);
+    if (!orderKey) {
+      return handleResponse(res, 404, "Order not found");
+    }
+
+    const updated = await Order.findOneAndUpdate(
+      { ...orderKey, cancelRequestStatus: "requested" },
+      {
+        $set: {
+          cancelRequestStatus: "rejected",
+        },
+      },
+      { new: true },
+    );
+
+    if (!updated) {
+      return handleResponse(res, 400, "No pending cancel request for this order");
+    }
+
+    emitOrderStatusUpdate(
+      updated.orderId,
+      { cancelRequestStatus: "rejected" },
+      updated.customer,
+    );
+    emitNotificationEvent(NOTIFICATION_EVENTS.ORDER_CANCELLED, {
+      orderId: updated.orderId,
+      customerId: updated.customer,
+      userId: updated.customer,
+      sellerId: updated.seller,
+      customerMessage: "Your cancel request was rejected. The order will continue.",
+      sellerMessage: `Cancel request rejected for order #${updated.orderId}.`,
+    });
+
+    return handleResponse(res, 200, "Cancel request rejected. Order continues.", updated);
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
   }
 };
 
@@ -479,6 +662,14 @@ export const updateOrderStatus = async (req, res) => {
 
     // Handle Cancellation (Stock Reversal & Transaction Update)
     if (status === "cancelled" && oldStatus !== "cancelled") {
+      order.cancelledBy = isAdmin ? "admin" : isOwnerSeller ? "seller" : order.cancelledBy || "admin";
+      order.workflowStatus = WORKFLOW_STATUS.CANCELLED;
+      if (isAdmin && order.cancelRequestStatus === "requested") {
+        order.cancelRequestStatus = "approved";
+        order.cancelRefundApprovedAt = new Date();
+        order.cancelRefundApprovedBy = userId;
+      }
+
       // 1. Reverse Stock
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.product, {
@@ -501,11 +692,31 @@ export const updateOrderStatus = async (req, res) => {
         { status: "Failed" },
       );
 
+      // 3. Online payment → customer wallet (idempotent)
+      if (order.paymentBreakdown?.grandTotal != null) {
+        try {
+          await reverseOrderFinanceOnCancellation(order._id, {
+            actorId: userId,
+            reason: order.cancelReason || `Cancelled by ${role}`,
+          });
+        } catch (financeError) {
+          logger.warn("updateOrderStatus finance reversal failed", {
+            scope: "updateOrderStatus",
+            orderId: canonicalOrderId,
+            error: financeError.message,
+          });
+        }
+      }
+
       emitNotificationEvent(NOTIFICATION_EVENTS.ORDER_CANCELLED, {
         orderId: canonicalOrderId,
         customerId: order.customer,
         userId: order.customer,
         sellerId: order.seller,
+        customerMessage:
+          String(order.paymentMode || "").toUpperCase() === "ONLINE"
+            ? "Order cancelled. Online payment has been credited to your wallet."
+            : "Your order has been cancelled.",
       });
     }
 
@@ -972,6 +1183,8 @@ export const rejectReturnPickup = async (req, res) => {
       customerId: order.customer,
       data: { reason: "Delivery partner rejected the pickup request." },
     });
+
+    await syncDeliveryPartnerBusyFlag(userId);
 
     return handleResponse(res, 200, "Pickup rejected successfully.");
   } catch (error) {
@@ -1448,6 +1661,9 @@ export const skipOrder = async (req, res) => {
       order.skippedBy.push(userId);
       await order.save();
     }
+
+    // Ensure skip never leaves the rider stuck as busy.
+    await syncDeliveryPartnerBusyFlag(userId);
 
     return handleResponse(res, 200, "Order skipped successfully");
   } catch (error) {

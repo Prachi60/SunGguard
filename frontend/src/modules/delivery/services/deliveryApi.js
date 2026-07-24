@@ -1,4 +1,5 @@
 import axiosInstance from "@core/api/axios";
+import { getWithDedupe } from "@core/api/dedupe";
 
 export const deliveryApi = {
   sendLoginOtp: (data) => axiosInstance.post("/delivery/send-login-otp", data),
@@ -14,8 +15,16 @@ export const deliveryApi = {
   getWalletSummary: () => axiosInstance.get("/delivery/wallet/summary"),
   getOrderHistory: (params, config = {}) =>
     axiosInstance.get("/delivery/order-history", { params, ...config }),
-  getAvailableOrders: (params = {}, config = {}) =>
-    axiosInstance.get("/orders/available", { params, ...config }),
+  getAvailableOrders: (params = {}, config = {}) => {
+    // Abortable one-offs (layout poll) keep using axios directly.
+    if (config?.signal) {
+      return axiosInstance.get("/orders/available", { params, ...config });
+    }
+    return getWithDedupe("/orders/available", params, {
+      ttl: config.ttl ?? 15000,
+      forceRefresh: config.forceRefresh ?? false,
+    });
+  },
   acceptOrder: (orderId, idempotencyKey) =>
     axiosInstance.put(
       `/orders/accept/${encodeURIComponent(String(orderId))}`,

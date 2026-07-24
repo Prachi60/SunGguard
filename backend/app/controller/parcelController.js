@@ -4,62 +4,96 @@ import CourierCompany from "../models/courierCompany.js";
 import Delivery from "../models/delivery.js";
 import User from "../models/customer.js";
 import Admin from "../models/admin.js";
-import { distanceMeters } from "../utils/geoUtils.js";
 import handleResponse from "../utils/helper.js";
 import Notification from "../models/notification.js";
 import { emitNotificationEvent } from "../modules/notifications/notification.emitter.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
-import { emitToAdmins, emitToDelivery, emitToCustomer, retractParcelBroadcast } from "../services/orderSocketEmitter.js";
+import { emitToAdmins, emitToDelivery, emitToCustomer, retractParcelBroadcast, emitParcelNewToNearbySellers, emitToSeller } from "../services/orderSocketEmitter.js";
 import {
   startParcelBroadcast,
   parcelAcceptAtomic,
   parcelRejectAtomic,
   fetchAvailableParcelsForRider,
+  fetchParcelsForSeller,
   cancelParcelSearch,
   computeRiderParcelEarnings,
 } from "../services/parcelWorkflowService.js";
 import { resetAllParcelData } from "../services/parcelDataResetService.js";
-import { sendSmsIndiaHubOtp } from "../services/smsIndiaHubService.js";
-import { useRealSMS, generateParcelOtp } from "../utils/otp.js";
+import { generateParcelOtp } from "../utils/otp.js";
 import { getCachedRoute } from "../services/mapsRouteService.js";
 import {
   resolveParcelBillableDays,
   applyBillableDaysToFare,
+  computeParcelDailyFare,
 } from "../utils/parcelFare.js";
+import {
+  createParcelRazorpayOrder,
+  createParcelCodRemitRazorpayOrder,
+  verifyParcelRazorpaySignature,
+} from "../services/parcelRazorpayService.js";
+import { findNearestParcelSellerWithDistance } from "../services/sellerNearbyService.js";
+import { applyParcelDeliveredRiderEarning } from "../services/parcelRiderSettlementService.js";
 
-/**
- * Send delivery verification OTP to the dropoff receiver phone.
- * Uses real SMS when configured; otherwise logs mock OTP for local testing.
- */
-async function dispatchParcelDeliveryOtpToReceiver(parcel) {
-  const digits = String(parcel?.dropAddress?.phone || "").replace(/\D/g, "");
-  const otp = String(parcel?.otp || "").trim();
-  if (!otp || digits.length < 10) {
-    console.warn("[parcel] skip receiver OTP — missing phone or otp", {
-      parcelId: parcel?._id,
-      phoneLen: digits.length,
-    });
-    return { sent: false };
+function isParcelCod(parcelOrMethod) {
+  const method =
+    typeof parcelOrMethod === "string"
+      ? parcelOrMethod
+      : parcelOrMethod?.paymentMethod;
+  return String(method || "").toUpperCase() === "COD";
+}
+
+function getParcelCollectAmount(parcel) {
+  if (!isParcelCod(parcel)) return 0;
+  const fromSettlement = Number(parcel?.codSettlement?.collectAmount);
+  if (Number.isFinite(fromSettlement) && fromSettlement > 0) return fromSettlement;
+  return Math.max(0, Number(parcel?.fare) || 0);
+}
+
+function buildInitialCodSettlement(paymentMethod, fare) {
+  if (!isParcelCod(paymentMethod)) {
+    return {
+      collectAmount: 0,
+      status: "NOT_APPLICABLE",
+    };
   }
+  return {
+    collectAmount: Math.max(0, Number(fare) || 0),
+    status: "COLLECT_PENDING",
+  };
+}
 
-  const phone = digits.slice(-10);
-  const receiverName = parcel?.dropAddress?.name || "Customer";
-  const message =
-    `Hi ${receiverName}, your SunGguard parcel delivery OTP is ${otp}. ` +
-    `Share this OTP only with the delivery captain to receive your parcel.`;
-
+async function notifyParcelRequested(parcel, userId) {
   try {
-    if (useRealSMS()) {
-      await sendSmsIndiaHubOtp({ phone, otp, message });
-    } else {
-      console.log(`[ParcelDeliveryOTP][mock] receiver ${phone} -> ${otp}`);
-    }
-    return { sent: true, phone };
-  } catch (error) {
-    console.error("[parcel] receiver OTP SMS failed:", error?.message || error);
-    return { sent: false, error: error?.message };
+    const admins = await Admin.find().select("_id").lean();
+    const adminIds = (admins || []).map((a) => a?._id).filter(Boolean);
+    emitNotificationEvent(NOTIFICATION_EVENTS.PARCEL_REQUESTED, {
+      userId,
+      customerId: userId,
+      adminIds,
+      parcelId: parcel._id,
+      fare: parcel.fare,
+      customerBody: `Your parcel delivery request (ID: ${parcel._id}) has been created. Searching for a nearby rider...`,
+      adminBody: `Parcel #${String(parcel._id).slice(-6)}${parcel.deliverySpeed === "express" ? " (EXPRESS)" : ""} booked for ₹${parcel.fare}. Open Parcel Delivery to view.`,
+      data: {
+        parcelId: parcel._id,
+        fare: parcel.fare,
+        deliverySpeed: parcel.deliverySpeed || "normal",
+        pickup: parcel.pickupAddress?.fullAddress,
+        drop: parcel.dropAddress?.fullAddress,
+      },
+    });
+  } catch (notifyErr) {
+    console.error("Failed to notify customer/admins for parcel request:", notifyErr);
   }
 }
+
+async function activateParcelAfterPayment(parcel) {
+  emitToAdmins("parcel:new", parcel);
+  await emitParcelNewToNearbySellers(parcel);
+  const searchingParcel = await startParcelBroadcast(parcel);
+  return searchingParcel || parcel;
+}
+import { syncDeliveryPartnerBusyFlag } from "../services/deliveryBusyService.js";
 
 // Utility to send notifications
 async function sendParcelNotification(userId, role, title, body, eventType = "alert", parcelId = null) {
@@ -104,18 +138,23 @@ export const calculateFare = async (req, res) => {
     const {
       pickupLat,
       pickupLng,
-      dropLat,
-      dropLng,
       weight,
       courierCompany,
       courierCompanyId,
       pickupWindow,
       pickupWindowDays,
       preferredPickupDate,
+      deliverySpeed,
     } = req.body;
 
-    if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
-      return handleResponse(res, 400, "Pickup and drop locations are required");
+    if (pickupLat == null || pickupLng == null) {
+      return handleResponse(res, 400, "Pickup location is required");
+    }
+
+    const pickupLatN = Number(pickupLat);
+    const pickupLngN = Number(pickupLng);
+    if (!Number.isFinite(pickupLatN) || !Number.isFinite(pickupLngN)) {
+      return handleResponse(res, 400, "Invalid pickup location");
     }
 
     const config = await ParcelConfig.getOrCreate();
@@ -129,20 +168,16 @@ export const calculateFare = async (req, res) => {
       );
     }
 
-    const distanceM = distanceMeters(
-      Number(pickupLat),
-      Number(pickupLng),
-      Number(dropLat),
-      Number(dropLng)
-    );
-    const distanceKm = Math.round((distanceM / 1000 + Number.EPSILON) * 100) / 100;
-    const baseFare = Math.round((Number(config.baseFare) || 0) * 100) / 100;
-    const weightCharge = Number(config.weightCharge) || 0;
-
-    // Distance fare and courier company fee are not charged to the customer.
-    const distanceFare = 0;
-    const weightFare =
-      Math.round((pkgWeight * weightCharge + Number.EPSILON) * 100) / 100;
+    // Distance = pickup (user) → nearest parcel-hub seller (delivery location).
+    const nearest = await findNearestParcelSellerWithDistance(pickupLatN, pickupLngN);
+    if (!nearest) {
+      return handleResponse(
+        res,
+        400,
+        "No parcel hub seller is available near your pickup location",
+      );
+    }
+    const distanceKm = nearest.distanceKm;
 
     let platformCharge = 0;
     const courierKey = courierCompanyId || courierCompany;
@@ -152,38 +187,38 @@ export const calculateFare = async (req, res) => {
         platformCharge = Math.round((Number(courier.platformCharge) || 0) * 100) / 100;
       }
     }
-    const companyCharge = 0;
-    const courierCharge = platformCharge;
 
-    const dailyFare =
-      Math.round((baseFare + weightFare + platformCharge + Number.EPSILON) * 100) / 100;
+    const daily = computeParcelDailyFare({
+      config,
+      distanceKm,
+      weightKg: pkgWeight,
+      platformCharge,
+      deliverySpeed,
+    });
 
     const billableDays = resolveParcelBillableDays({
       pickupWindow,
       pickupWindowDays,
       preferredPickupDate,
     });
-    const priced = applyBillableDaysToFare(
-      {
-        baseFare,
-        distanceFare,
-        weightFare,
-        platformCharge,
-        companyCharge,
-        courierCharge,
-        fare: dailyFare,
-      },
-      billableDays,
-    );
+    const priced = applyBillableDaysToFare(daily, billableDays);
+
+    const sellerName = nearest.seller.shopName || nearest.seller.name || "Parcel hub";
+    const configuredExpressCharge =
+      Math.round((Math.max(0, Number(config.expressCharge) || 0) + Number.EPSILON) * 100) / 100;
 
     return handleResponse(res, 200, "Fare calculated successfully", {
       distance: distanceKm,
+      perKmCharge: daily.perKmCharge,
+      sellerName,
+      configuredExpressCharge,
       baseFare: priced.baseFare,
       distanceFare: priced.distanceFare,
       weightFare: priced.weightFare,
       platformCharge: priced.platformCharge,
       companyCharge: priced.companyCharge,
       courierCharge: priced.courierCharge,
+      expressCharge: priced.expressCharge,
       dailyFare: priced.dailyFare,
       billableDays: priced.billableDays,
       fare: priced.fare,
@@ -202,10 +237,12 @@ export const createParcel = async (req, res) => {
       paymentMethod,
       courierCompany,
       courierCompanyId,
+      customCourierName,
       destinationCity,
       preferredPickupDate,
       pickupWindow,
       pickupWindowDays,
+      deliverySpeed,
     } = req.body;
 
     if (!pickupAddress || !dropAddress || !packageDetails || !paymentMethod) {
@@ -217,13 +254,22 @@ export const createParcel = async (req, res) => {
     if (!courierDoc) {
       return handleResponse(res, 400, "Please select a valid courier company");
     }
-    const courier = courierDoc.name;
+    // For the "Other" option the customer types their own company name; the
+    // platform rate still comes from the admin-managed "Other" record.
+    let courier = courierDoc.name;
+    if (courierDoc.isOther) {
+      const typedName = String(customCourierName || "").trim();
+      if (!typedName) {
+        return handleResponse(res, 400, "Please enter the courier company name");
+      }
+      courier = typedName;
+    }
     const city = String(destinationCity || "").trim();
     if (!city) {
       return handleResponse(res, 400, "Please select destination city");
     }
 
-    const allowedWindows = ["today", "7_days", "15_days", "30_days", "specific"];
+    const allowedWindows = ["today", "7_days", "15_days", "30_days", "custom_days", "specific"];
     const windowValue = allowedWindows.includes(String(pickupWindow || "").trim())
       ? String(pickupWindow).trim()
       : "specific";
@@ -233,17 +279,28 @@ export const createParcel = async (req, res) => {
       "7_days": 7,
       "15_days": 15,
       "30_days": 30,
+      custom_days: null,
       specific: null,
     };
 
     let resolvedWindowDays =
-      windowValue === "specific"
+      windowValue === "specific" || windowValue === "custom_days"
         ? pickupWindowDays == null || pickupWindowDays === ""
           ? null
           : Number(pickupWindowDays)
         : windowDaysMap[windowValue];
 
-    if (windowValue !== "specific" && !Number.isFinite(resolvedWindowDays)) {
+    if (windowValue === "custom_days") {
+      if (!Number.isFinite(resolvedWindowDays) || resolvedWindowDays < 2) {
+        return handleResponse(res, 400, "Please enter at least 2 days for custom booking");
+      }
+      if (resolvedWindowDays > 30) {
+        return handleResponse(res, 400, "Custom booking cannot exceed 30 days");
+      }
+      resolvedWindowDays = Math.floor(resolvedWindowDays);
+    }
+
+    if (windowValue !== "specific" && windowValue !== "custom_days" && !Number.isFinite(resolvedWindowDays)) {
       resolvedWindowDays = windowDaysMap[windowValue] ?? 0;
     }
 
@@ -296,42 +353,40 @@ export const createParcel = async (req, res) => {
       return handleResponse(res, 400, "Invalid package type");
     }
 
-    const distanceM = distanceMeters(
+    const speedValue = String(deliverySpeed || "normal").trim().toLowerCase();
+    if (!["normal", "express"].includes(speedValue)) {
+      return handleResponse(res, 400, "Please select a valid delivery speed");
+    }
+
+    // Fare distance = pickup (user) → nearest parcel-hub seller (delivery location).
+    const nearest = await findNearestParcelSellerWithDistance(
       Number(pickupAddress.lat),
       Number(pickupAddress.lng),
-      Number(dropAddress.lat),
-      Number(dropAddress.lng)
     );
-    const distanceKm = Math.round((distanceM / 1000 + Number.EPSILON) * 100) / 100;
-    const baseFare = Math.round((Number(config.baseFare) || 0) * 100) / 100;
-    // Distance fare and courier company fee are not charged to the customer.
-    const distanceFare = 0;
-    const weightFare =
-      Math.round((weight * (Number(config.weightCharge) || 0) + Number.EPSILON) * 100) / 100;
+    if (!nearest) {
+      return handleResponse(
+        res,
+        400,
+        "No parcel hub seller is available near your pickup location",
+      );
+    }
+    const distanceKm = nearest.distanceKm;
     const platformCharge =
       Math.round((Number(courierDoc.platformCharge) || 0) * 100) / 100;
-    const companyCharge = 0;
-    const courierCharge = platformCharge;
-    const dailyFare =
-      Math.round((baseFare + weightFare + platformCharge + Number.EPSILON) * 100) / 100;
+    const daily = computeParcelDailyFare({
+      config,
+      distanceKm,
+      weightKg: weight,
+      platformCharge,
+      deliverySpeed: speedValue,
+    });
 
     const billableDays = resolveParcelBillableDays({
       pickupWindow: windowValue,
       pickupWindowDays: resolvedWindowDays,
       preferredPickupDate: pickupDay,
     });
-    const priced = applyBillableDaysToFare(
-      {
-        baseFare,
-        distanceFare,
-        weightFare,
-        platformCharge,
-        companyCharge,
-        courierCharge,
-        fare: dailyFare,
-      },
-      billableDays,
-    );
+    const priced = applyBillableDaysToFare(daily, billableDays);
 
     // Generate 6-digit OTP code
     const otp = generateParcelOtp();
@@ -343,6 +398,8 @@ export const createParcel = async (req, res) => {
       packageDetails,
       courierCompany: courier,
       courierCompanyId: courierDoc._id,
+      sellerId: nearest.seller._id,
+      deliverySpeed: speedValue,
       destinationCity: city,
       preferredPickupDate: pickupDate,
       pickupWindow: windowValue,
@@ -357,48 +414,120 @@ export const createParcel = async (req, res) => {
         platformCharge: priced.platformCharge,
         companyCharge: priced.companyCharge,
         courierCharge: priced.courierCharge,
+        expressCharge: priced.expressCharge,
         dailyFare: priced.dailyFare,
         billableDays: priced.billableDays,
       },
-      paymentStatus: paymentMethod === "COD" ? "PENDING" : "PAID", // Card/UPI/Wallet paid immediately
+      paymentStatus: "PENDING",
       paymentMethod,
+      codSettlement: buildInitialCodSettlement(paymentMethod, priced.fare),
       otp,
       status: "REQUESTED",
     });
 
-    // Notify admins via socket (live modal on admin dashboard)
-    emitToAdmins("parcel:new", parcel);
+    const method = String(paymentMethod || "").toUpperCase();
 
-    // Broadcast to nearby parcel riders (first accept wins)
-    const searchingParcel = await startParcelBroadcast(parcel);
-    const resultParcel = searchingParcel || parcel;
-
-    // In-app + push: customer confirmation and admin inbox (so admin can open request)
-    try {
-      const admins = await Admin.find().select("_id").lean();
-      const adminIds = (admins || []).map((a) => a?._id).filter(Boolean);
-      emitNotificationEvent(NOTIFICATION_EVENTS.PARCEL_REQUESTED, {
-        userId: req.user.id,
-        customerId: req.user.id,
-        adminIds,
-        parcelId: parcel._id,
-        fare: parcel.fare,
-        customerBody: `Your parcel delivery request (ID: ${parcel._id}) has been created. Searching for a nearby rider...`,
-        adminBody: `Parcel #${String(parcel._id).slice(-6)} booked for ₹${parcel.fare}. Open Parcel Delivery to view.`,
-        data: {
-          parcelId: parcel._id,
-          fare: parcel.fare,
-          pickup: parcel.pickupAddress?.fullAddress,
-          drop: parcel.dropAddress?.fullAddress,
-        },
-      });
-    } catch (notifyErr) {
-      console.error("Failed to notify customer/admins for parcel request:", notifyErr);
+    // UPI: create Razorpay order; broadcast only after payment verify.
+    if (method === "UPI") {
+      try {
+        const razorpay = await createParcelRazorpayOrder(parcel);
+        parcel.razorpayOrderId = razorpay.orderId;
+        await parcel.save();
+        return handleResponse(res, 201, "Complete UPI payment to confirm parcel", {
+          parcel,
+          requiresPayment: true,
+          razorpay,
+        });
+      } catch (payErr) {
+        await Parcel.findByIdAndDelete(parcel._id).catch(() => {});
+        console.error("[createParcel] Razorpay order failed:", {
+          message: payErr?.message,
+          statusCode: payErr?.statusCode,
+          error: payErr?.error,
+        });
+        const status = payErr.statusCode || 500;
+        return handleResponse(
+          res,
+          status,
+          payErr.message || "Failed to start Razorpay payment",
+        );
+      }
     }
 
-    return handleResponse(res, 201, "Parcel request created successfully", resultParcel);
+    // COD (and any non-UPI): start search immediately.
+    const resultParcel = await activateParcelAfterPayment(parcel);
+    await notifyParcelRequested(resultParcel, req.user.id);
+
+    return handleResponse(res, 201, "Parcel request created successfully", {
+      parcel: resultParcel,
+      requiresPayment: false,
+    });
   } catch (error) {
     return handleResponse(res, 500, error.message);
+  }
+};
+
+/**
+ * Verify Razorpay UPI payment for a parcel, then start rider/seller search.
+ */
+export const verifyParcelPayment = async (req, res) => {
+  try {
+    const {
+      parcelId,
+      razorpay_order_id: razorpayOrderId,
+      razorpay_payment_id: razorpayPaymentId,
+      razorpay_signature: razorpaySignature,
+    } = req.body || {};
+
+    if (!parcelId) {
+      return handleResponse(res, 400, "Parcel ID is required");
+    }
+
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+
+    if (String(parcel.customerId) !== String(req.user.id)) {
+      return handleResponse(res, 403, "You are not authorized for this parcel");
+    }
+
+    if (String(parcel.paymentMethod).toUpperCase() !== "UPI") {
+      return handleResponse(res, 400, "This parcel does not require UPI payment");
+    }
+
+    if (parcel.paymentStatus === "PAID") {
+      return handleResponse(res, 200, "Parcel already paid", {
+        parcel,
+        requiresPayment: false,
+      });
+    }
+
+    verifyParcelRazorpaySignature({
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+    });
+
+    if (parcel.razorpayOrderId && parcel.razorpayOrderId !== razorpayOrderId) {
+      return handleResponse(res, 400, "Razorpay order mismatch for this parcel");
+    }
+
+    parcel.paymentStatus = "PAID";
+    parcel.razorpayOrderId = razorpayOrderId;
+    parcel.razorpayPaymentId = razorpayPaymentId;
+    await parcel.save();
+
+    const resultParcel = await activateParcelAfterPayment(parcel);
+    await notifyParcelRequested(resultParcel, req.user.id);
+
+    return handleResponse(res, 200, "Payment verified. Searching for rider...", {
+      parcel: resultParcel,
+      requiresPayment: false,
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    return handleResponse(res, status, error.message);
   }
 };
 
@@ -418,7 +547,8 @@ export const trackParcel = async (req, res) => {
   try {
     const parcel = await Parcel.findById(req.params.id)
       .populate("customerId", "name phone email")
-      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location");
+      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location")
+      .populate("sellerId", "shopName location");
 
     if (!parcel) {
       return handleResponse(res, 404, "Parcel not found");
@@ -446,11 +576,46 @@ export const cancelParcelByCustomer = async (req, res) => {
       return handleResponse(res, 403, "You are not authorized for this parcel");
     }
 
+    // Once a delivery partner has accepted, cancel is not allowed.
+    if (parcel.deliveryPartnerId) {
+      return handleResponse(
+        res,
+        409,
+        "Parcel cannot be cancelled after a delivery partner has accepted the request",
+      );
+    }
+
     if (!["REQUESTED", "SEARCHING"].includes(parcel.status)) {
       return handleResponse(
         res,
         409,
-        "Parcel search can only be cancelled while searching for rider",
+        "Parcel cannot be cancelled after a delivery partner has accepted the request",
+      );
+    }
+
+    // Atomic guard against race with rider accept.
+    const updated = await Parcel.findOneAndUpdate(
+      {
+        _id: parcelId,
+        customerId: req.user.id,
+        deliveryPartnerId: null,
+        status: { $in: ["REQUESTED", "SEARCHING"] },
+      },
+      {
+        $set: {
+          status: "CANCELLED",
+          searchExpiresAt: null,
+        },
+        $unset: { searchMeta: 1 },
+      },
+      { new: true },
+    );
+
+    if (!updated) {
+      return handleResponse(
+        res,
+        409,
+        "Parcel cannot be cancelled after a delivery partner has accepted the request",
       );
     }
 
@@ -459,22 +624,17 @@ export const cancelParcelByCustomer = async (req, res) => {
       await retractParcelBroadcast(String(parcel._id), null);
     }
 
-    parcel.status = "CANCELLED";
-    parcel.searchExpiresAt = null;
-    parcel.searchMeta = undefined;
-    await parcel.save();
-
-    emitToAdmins("parcel:status:update", parcel);
-    emitToCustomer(parcel.customerId, {
+    emitToAdmins("parcel:status:update", updated);
+    emitToCustomer(updated.customerId, {
       event: "parcel:status:update",
       payload: {
-        parcelId: String(parcel._id),
-        status: parcel.status,
-        parcel,
+        parcelId: String(updated._id),
+        status: updated.status,
+        parcel: updated,
       },
     });
 
-    return handleResponse(res, 200, "Parcel search cancelled successfully", parcel);
+    return handleResponse(res, 200, "Parcel search cancelled successfully", updated);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -531,7 +691,7 @@ export const adminAssignRider = async (req, res) => {
     parcel.searchMeta = undefined;
     await parcel.save();
 
-    rider.isBusy = true;
+    rider.isBusy = await syncDeliveryPartnerBusyFlag(riderId);
     await rider.save();
     // Emit socket event to the rider in real-time
     emitToDelivery(riderId, {
@@ -598,6 +758,7 @@ export const getBookingConfig = async (req, res) => {
         platformCharge: Math.round((Number(c.platformCharge) || 0) * 100) / 100,
         companyCharge: Math.round((Number(c.companyCharge) || 0) * 100) / 100,
         location: c.location || null,
+        isOther: c.isOther === true,
       })),
     });
   } catch (error) {
@@ -617,8 +778,10 @@ export const adminUpdatePricingConfig = async (req, res) => {
       riderBaseFareSharePercent,
       riderDistanceFareSharePercent,
       packageTypes,
+      packageCategories,
       maxWeightKg,
       packageDescriptionPlaceholder,
+      expressCharge,
     } = req.body;
 
     const config = await ParcelConfig.getOrCreate();
@@ -664,8 +827,15 @@ export const adminUpdatePricingConfig = async (req, res) => {
     if (packageTypes !== undefined) {
       config.packageTypes = ParcelConfig.normalizePackageTypes(packageTypes);
     }
+    if (packageCategories !== undefined) {
+      config.packageCategories = ParcelConfig.normalizePackageCategories(packageCategories);
+    }
     if (maxWeightKg !== undefined) {
       config.maxWeightKg = Math.min(50, Math.max(0.1, Number(maxWeightKg) || 1));
+    }
+    if (expressCharge !== undefined) {
+      config.expressCharge = Math.max(0, Number(expressCharge) || 0);
+      config.markModified("expressCharge");
     }
     if (packageDescriptionPlaceholder !== undefined) {
       config.packageDescriptionPlaceholder = String(
@@ -674,7 +844,13 @@ export const adminUpdatePricingConfig = async (req, res) => {
     }
 
     await config.save();
-    return handleResponse(res, 200, "Pricing config updated successfully", config);
+    const fresh = await ParcelConfig.findById(config._id).lean();
+    return handleResponse(
+      res,
+      200,
+      "Pricing config updated successfully",
+      fresh || config,
+    );
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -787,7 +963,9 @@ export const riderGetAssignedParcels = async (req, res) => {
       deliveryPartnerId: req.user.id,
       status: { $ne: "DELIVERED" }
     })
+      .select("-otp")
       .populate("customerId", "name phone")
+      .populate("sellerId", "name shopName phone address location")
       .sort({ createdAt: -1 });
 
     return handleResponse(res, 200, "Assigned parcels retrieved successfully", parcels);
@@ -798,12 +976,13 @@ export const riderGetAssignedParcels = async (req, res) => {
 
 /**
  * Road route for assigned parcel task map.
- * Query: phase=pickup|drop|full, originLat, originLng (rider position).
+ * Query: phase=pickup|seller|agency|drop|full, originLat, originLng.
+ * Rider job is pickup (user) → parcel hub seller; courier city is not the map destination.
  */
 export const getParcelRoute = async (req, res) => {
   try {
     const { parcelId } = req.params;
-    const phase = String(req.query.phase || "pickup").toLowerCase();
+    const phase = String(req.query.phase || "seller").toLowerCase();
     const originLat = parseFloat(req.query.originLat);
     const originLng = parseFloat(req.query.originLng);
 
@@ -811,7 +990,9 @@ export const getParcelRoute = async (req, res) => {
       return handleResponse(res, 400, "originLat and originLng required");
     }
 
-    const parcel = await Parcel.findById(parcelId).lean();
+    const parcel = await Parcel.findById(parcelId)
+      .populate("sellerId", "location shopName")
+      .lean();
     if (!parcel) {
       return handleResponse(res, 404, "Parcel not found");
     }
@@ -829,15 +1010,29 @@ export const getParcelRoute = async (req, res) => {
       lng: Number(parcel.dropAddress?.lng),
     };
 
+    const sellerCoords = parcel.sellerId?.location?.coordinates;
+    const seller =
+      Array.isArray(sellerCoords) && sellerCoords.length >= 2
+        ? { lat: Number(sellerCoords[1]), lng: Number(sellerCoords[0]) }
+        : null;
+
     if (!Number.isFinite(pickup.lat) || !Number.isFinite(pickup.lng)) {
       return handleResponse(res, 400, "Pickup location missing");
     }
-    if (!Number.isFinite(drop.lat) || !Number.isFinite(drop.lng)) {
-      return handleResponse(res, 400, "Drop location missing");
-    }
 
     const origin = { lat: originLat, lng: originLng };
-    const dest = phase === "drop" || phase === "full" ? drop : pickup;
+    let dest = pickup;
+    if (phase === "seller" || phase === "agency") {
+      if (!seller || !Number.isFinite(seller.lat) || !Number.isFinite(seller.lng)) {
+        return handleResponse(res, 400, "Seller hub location missing");
+      }
+      dest = seller;
+    } else if (phase === "drop" || phase === "full") {
+      if (!Number.isFinite(drop.lat) || !Number.isFinite(drop.lng)) {
+        return handleResponse(res, 400, "Drop location missing");
+      }
+      dest = drop;
+    }
 
     const route = await getCachedRoute(origin, dest, "driving", null, phase);
     return handleResponse(res, 200, "Route", { ...route, destination: dest });
@@ -864,26 +1059,51 @@ export const riderUpdateStatus = async (req, res) => {
       return handleResponse(res, 400, "Invalid status transition");
     }
 
+    // After a rider has accepted, the parcel job cannot be cancelled.
+    if (status === "CANCELLED") {
+      return handleResponse(
+        res,
+        409,
+        "Parcel cannot be cancelled after a delivery partner has accepted the request",
+      );
+    }
+
+    // Pickup from customer requires OTP confirmation before hub-drop screen.
+    if (status === "PICKED_UP") {
+      const providedOtp = String(req.body?.otp || "").trim();
+      if (!providedOtp) {
+        return handleResponse(
+          res,
+          400,
+          "Enter the customer OTP to confirm parcel pickup",
+        );
+      }
+      if (providedOtp !== String(parcel.otp || "").trim()) {
+        return handleResponse(res, 400, "Invalid pickup OTP");
+      }
+    }
+
     parcel.status = status;
     if (status === "PICKED_UP" && pickupProofImage) {
       parcel.pickupProofImage = pickupProofImage;
     }
 
-    // Fresh OTP at delivery time — sent to dropoff receiver phone.
-    // Uses 123456 until USE_REAL_SMS=true.
-    let receiverOtpDispatch = null;
-    if (status === "OUT_FOR_DELIVERY") {
-      parcel.otp = generateParcelOtp();
+    // COD: rider collects full fare cash from customer at pickup.
+    if (status === "PICKED_UP" && isParcelCod(parcel)) {
+      if (!parcel.codSettlement) parcel.codSettlement = {};
+      parcel.codSettlement.collectAmount = getParcelCollectAmount(parcel);
+      if (parcel.codSettlement.status === "COLLECT_PENDING" || !parcel.codSettlement.status) {
+        parcel.codSettlement.status = "RIDER_HOLDING";
+        parcel.codSettlement.riderCollectedAt = new Date();
+      }
     }
 
+    // OTP is only verified at customer pickup. Hub drop needs no OTP/SMS.
     await parcel.save();
 
-    if (status === "OUT_FOR_DELIVERY") {
-      receiverOtpDispatch = await dispatchParcelDeliveryOtpToReceiver(parcel);
-    }
-
     const populated = await Parcel.findById(parcel._id)
-      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location");
+      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location")
+      .populate("sellerId", "name shopName phone address location");
 
     emitToAdmins("parcel:status:update", populated || parcel);
     emitToCustomer(parcel.customerId, {
@@ -892,36 +1112,37 @@ export const riderUpdateStatus = async (req, res) => {
         parcelId: String(parcel._id),
         status,
         parcel: populated || parcel,
-        otp: status === "OUT_FOR_DELIVERY" ? parcel.otp : undefined,
-        otpSentToReceiver: receiverOtpDispatch?.sent === true,
+        // Share pickup OTP while captain is going to / at customer.
+        otp:
+          status === "PICKUP_REACHED" ||
+          status === "RIDER_ASSIGNED" ||
+          status === "ACCEPTED"
+            ? parcel.otp
+            : undefined,
       },
     });
 
     if (status === "CANCELLED") {
-      const rider = await Delivery.findById(req.user.id);
-      if (rider) {
-        rider.isBusy = false;
-        await rider.save();
-      }
+      await syncDeliveryPartnerBusyFlag(req.user.id);
     }
 
     // Map status to customer-friendly notification descriptions
     let msg = "";
     if (status === "ACCEPTED") msg = "Your parcel delivery request has been accepted by the rider.";
     else if (status === "RIDER_ASSIGNED") msg = "Rider is on the way to pick up your parcel.";
-    else if (status === "PICKUP_REACHED") msg = "Rider has reached your pickup location.";
-    else if (status === "PICKED_UP") msg = "Rider has picked up your parcel.";
-    else if (status === "OUT_FOR_DELIVERY") {
-      msg = receiverOtpDispatch?.sent
-        ? `Your parcel is out for delivery. Delivery OTP ${parcel.otp} has been sent to receiver ${parcel.dropAddress?.phone}.`
-        : `Your parcel is out for delivery. Delivery OTP is ${parcel.otp}. Share it with the receiver if needed.`;
+    else if (status === "PICKUP_REACHED") {
+      msg = `Rider has reached your pickup location. Share pickup OTP ${parcel.otp} with the captain.`;
     }
+    else if (status === "PICKED_UP") msg = "Rider has picked up your parcel. Live tracking has ended.";
+    else if (status === "OUT_FOR_DELIVERY") msg = "Your parcel has been collected and is being dropped at the seller hub.";
     else if (status === "CANCELLED") msg = "Your parcel delivery was cancelled by the rider.";
 
     await sendParcelNotification(
       parcel.customerId,
       "customer",
-      status === "OUT_FOR_DELIVERY" ? "Parcel OTP sent to receiver" : `Parcel status: ${status}`,
+      status === "PICKUP_REACHED"
+        ? "Share pickup OTP with captain"
+        : `Parcel status: ${status}`,
       msg,
       NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE,
       parcel._id
@@ -929,9 +1150,8 @@ export const riderUpdateStatus = async (req, res) => {
 
     const resultDoc = populated || parcel;
     const resultPayload = resultDoc.toObject ? resultDoc.toObject() : { ...resultDoc };
-    if (status === "OUT_FOR_DELIVERY") {
-      resultPayload.otpSentToReceiver = receiverOtpDispatch?.sent === true;
-    }
+    // Never expose OTP to the delivery partner response payload.
+    delete resultPayload.otp;
 
     return handleResponse(res, 200, "Parcel status updated successfully", resultPayload);
   } catch (error) {
@@ -941,10 +1161,10 @@ export const riderUpdateStatus = async (req, res) => {
 
 export const riderCompleteDelivery = async (req, res) => {
   try {
-    const { parcelId, otp, deliveryProofImage } = req.body;
+    const { parcelId, deliveryProofImage } = req.body;
 
-    if (!parcelId || !otp) {
-      return handleResponse(res, 400, "Parcel ID and OTP are required");
+    if (!parcelId) {
+      return handleResponse(res, 400, "Parcel ID is required");
     }
 
     const parcel = await Parcel.findById(parcelId);
@@ -956,20 +1176,49 @@ export const riderCompleteDelivery = async (req, res) => {
       return handleResponse(res, 403, "You are not authorized for this parcel");
     }
 
-    if (parcel.otp !== String(otp).trim()) {
-      return handleResponse(res, 400, "Invalid delivery verification OTP");
+    // Hub drop: no OTP. Customer OTP already verified at pickup.
+    if (!["PICKED_UP", "OUT_FOR_DELIVERY"].includes(parcel.status)) {
+      return handleResponse(
+        res,
+        409,
+        "Parcel can only be dropped at hub after customer pickup is confirmed",
+      );
     }
 
     parcel.status = "DELIVERED";
-    parcel.paymentStatus = "PAID";
     if (deliveryProofImage) {
       parcel.deliveryProofImage = deliveryProofImage;
     }
 
+    // COD: rider hands full cash to seller; admin payment waits for seller Razorpay remit.
+    // UPI/online: already PAID at booking.
+    if (isParcelCod(parcel)) {
+      if (!parcel.codSettlement) parcel.codSettlement = {};
+      parcel.codSettlement.collectAmount = getParcelCollectAmount(parcel);
+      parcel.codSettlement.status = "WITH_SELLER";
+      parcel.codSettlement.handedToSellerAt = new Date();
+      if (!parcel.codSettlement.riderCollectedAt) {
+        parcel.codSettlement.riderCollectedAt = new Date();
+      }
+      // Keep paymentStatus PENDING until seller remits to admin.
+      if (parcel.paymentStatus !== "PAID") {
+        parcel.paymentStatus = "PENDING";
+      }
+    } else {
+      parcel.paymentStatus = "PAID";
+    }
+
     await parcel.save();
 
+    try {
+      await applyParcelDeliveredRiderEarning(parcel);
+    } catch (earnErr) {
+      console.error("[parcel] rider earning credit failed:", earnErr?.message || earnErr);
+    }
+
     const populated = await Parcel.findById(parcel._id)
-      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location");
+      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location")
+      .populate("sellerId", "name shopName phone address location");
 
     emitToAdmins("parcel:status:update", populated || parcel);
     emitToCustomer(parcel.customerId, {
@@ -981,23 +1230,33 @@ export const riderCompleteDelivery = async (req, res) => {
       },
     });
 
-    const rider = await Delivery.findById(req.user.id);
-    if (rider) {
-      rider.isBusy = false;
-      await rider.save();
+    if (parcel.sellerId) {
+      emitToSeller(String(parcel.sellerId?._id || parcel.sellerId), {
+        event: "parcel:status:update",
+        payload: {
+          parcelId: String(parcel._id),
+          status: "DELIVERED",
+          parcel: populated || parcel,
+          codPending:
+            isParcelCod(parcel) && parcel.codSettlement?.status === "WITH_SELLER",
+        },
+      });
     }
 
-    // Notify customer
+    await syncDeliveryPartnerBusyFlag(req.user.id);
+
     await sendParcelNotification(
       parcel.customerId,
       "customer",
-      "Parcel Delivered",
-      `Your parcel has been delivered successfully. Thank you for using our service!`,
+      "Parcel dropped at hub",
+      isParcelCod(parcel)
+        ? `Your parcel was dropped at the seller hub. COD ₹${getParcelCollectAmount(parcel)} was collected at pickup.`
+        : `Your parcel was dropped at the seller hub successfully.`,
       NOTIFICATION_EVENTS.PARCEL_DELIVERED,
       parcel._id
     );
 
-    return handleResponse(res, 200, "Parcel delivered successfully", parcel);
+    return handleResponse(res, 200, "Parcel dropped at hub successfully", populated || parcel);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -1066,6 +1325,10 @@ export const riderAcceptParcel = async (req, res) => {
       idempotencyKey,
     );
 
+    if (!duplicate) {
+      await syncDeliveryPartnerBusyFlag(req.user.id);
+    }
+
     return handleResponse(
       res,
       200,
@@ -1086,6 +1349,160 @@ export const riderRejectParcel = async (req, res) => {
 
     await parcelRejectAtomic(req.user.id, parcelId);
     return handleResponse(res, 200, "Parcel offer skipped");
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+/** Parcel hub sellers: assigned + in-radius searching parcels. */
+export const sellerGetParcels = async (req, res) => {
+  try {
+    const parcels = await fetchParcelsForSeller(req.user.id);
+    return handleResponse(res, 200, "Seller parcels retrieved", parcels);
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
+function assertSellerOwnsParcel(parcel, sellerId) {
+  if (!parcel?.sellerId || String(parcel.sellerId) !== String(sellerId)) {
+    const err = new Error("You are not assigned to this parcel");
+    err.statusCode = 403;
+    throw err;
+  }
+}
+
+/** Seller confirms COD cash received from rider (optional explicit step). */
+export const sellerConfirmCodReceived = async (req, res) => {
+  try {
+    const { parcelId } = req.body;
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) return handleResponse(res, 404, "Parcel not found");
+    assertSellerOwnsParcel(parcel, req.user.id);
+
+    if (!isParcelCod(parcel)) {
+      return handleResponse(res, 400, "This parcel is not COD");
+    }
+    if (parcel.status !== "DELIVERED") {
+      return handleResponse(res, 400, "Parcel must be delivered before confirming COD cash");
+    }
+
+    if (!parcel.codSettlement) parcel.codSettlement = {};
+    parcel.codSettlement.collectAmount = getParcelCollectAmount(parcel);
+    parcel.codSettlement.status = "WITH_SELLER";
+    parcel.codSettlement.sellerConfirmedAt = new Date();
+    if (!parcel.codSettlement.handedToSellerAt) {
+      parcel.codSettlement.handedToSellerAt = new Date();
+    }
+    await parcel.save();
+
+    emitToAdmins("parcel:status:update", parcel);
+    return handleResponse(res, 200, "COD cash confirmed with seller", parcel);
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+/** Seller starts Razorpay checkout to remit COD cash to admin. */
+export const sellerCreateCodRemitPayment = async (req, res) => {
+  try {
+    const { parcelId } = req.body;
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) return handleResponse(res, 404, "Parcel not found");
+    assertSellerOwnsParcel(parcel, req.user.id);
+
+    if (!isParcelCod(parcel)) {
+      return handleResponse(res, 400, "This parcel is not COD");
+    }
+    if (parcel.status !== "DELIVERED") {
+      return handleResponse(res, 400, "Parcel must be delivered before remitting COD");
+    }
+    if (parcel.codSettlement?.status === "REMITTED_TO_ADMIN" || parcel.paymentStatus === "PAID") {
+      return handleResponse(res, 400, "COD already remitted to admin");
+    }
+    if (
+      parcel.codSettlement?.status !== "WITH_SELLER" &&
+      parcel.codSettlement?.status !== "RIDER_HOLDING"
+    ) {
+      // Allow remit once delivered even if status lag; force WITH_SELLER.
+      if (!parcel.codSettlement) parcel.codSettlement = {};
+      parcel.codSettlement.status = "WITH_SELLER";
+      parcel.codSettlement.handedToSellerAt =
+        parcel.codSettlement.handedToSellerAt || new Date();
+    }
+
+    const amount = getParcelCollectAmount(parcel);
+    if (amount <= 0) {
+      return handleResponse(res, 400, "Invalid COD collect amount");
+    }
+    parcel.codSettlement.collectAmount = amount;
+
+    const razorpay = await createParcelCodRemitRazorpayOrder(parcel, req.user.id);
+    parcel.codSettlement.sellerRazorpayOrderId = razorpay.orderId;
+    await parcel.save();
+
+    return handleResponse(res, 200, "Complete Razorpay payment to remit COD to admin", {
+      parcel,
+      razorpay,
+      collectAmount: amount,
+    });
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+/** Verify seller Razorpay remittance — marks COD paid to admin. */
+export const sellerVerifyCodRemitPayment = async (req, res) => {
+  try {
+    const {
+      parcelId,
+      razorpay_order_id: razorpayOrderId,
+      razorpay_payment_id: razorpayPaymentId,
+      razorpay_signature: razorpaySignature,
+    } = req.body;
+
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) return handleResponse(res, 404, "Parcel not found");
+    assertSellerOwnsParcel(parcel, req.user.id);
+
+    if (!isParcelCod(parcel)) {
+      return handleResponse(res, 400, "This parcel is not COD");
+    }
+    if (parcel.codSettlement?.status === "REMITTED_TO_ADMIN" && parcel.paymentStatus === "PAID") {
+      return handleResponse(res, 200, "COD already remitted", parcel);
+    }
+
+    verifyParcelRazorpaySignature({
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+    });
+
+    if (
+      parcel.codSettlement?.sellerRazorpayOrderId &&
+      parcel.codSettlement.sellerRazorpayOrderId !== razorpayOrderId
+    ) {
+      return handleResponse(res, 400, "Razorpay order mismatch");
+    }
+
+    if (!parcel.codSettlement) parcel.codSettlement = {};
+    parcel.codSettlement.status = "REMITTED_TO_ADMIN";
+    parcel.codSettlement.remittedAt = new Date();
+    parcel.codSettlement.sellerConfirmedAt =
+      parcel.codSettlement.sellerConfirmedAt || new Date();
+    parcel.codSettlement.sellerRazorpayOrderId = razorpayOrderId;
+    parcel.codSettlement.sellerRazorpayPaymentId = razorpayPaymentId;
+    parcel.codSettlement.collectAmount = getParcelCollectAmount(parcel);
+    parcel.paymentStatus = "PAID";
+    await parcel.save();
+
+    emitToAdmins("parcel:status:update", parcel);
+    emitToSeller(String(req.user.id), {
+      event: "parcel:status:update",
+      payload: { parcelId: String(parcel._id), status: parcel.status, parcel },
+    });
+
+    return handleResponse(res, 200, "COD remitted to admin successfully", parcel);
   } catch (error) {
     return handleResponse(res, error.statusCode || 500, error.message);
   }

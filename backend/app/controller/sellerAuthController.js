@@ -17,6 +17,46 @@ const generateToken = (seller) =>
         expiresIn: "7d",
     });
 
+const parseBool = (value) =>
+    value === true || value === "true" || value === 1 || value === "1";
+
+const resolveSellerServiceFlags = (body) => {
+    const serviceType = String(body?.serviceType || "").trim().toLowerCase();
+
+    if (serviceType) {
+        if (serviceType === "parcel") {
+            return { isParcelService: true, isQuickCommerceService: false };
+        }
+        if (
+            serviceType === "quick-orders" ||
+            serviceType === "quick-order" ||
+            serviceType === "quick-commerce" ||
+            serviceType === "quick_commerce"
+        ) {
+            return { isParcelService: false, isQuickCommerceService: true };
+        }
+        return { error: "Invalid service type. Choose parcel or quick-orders." };
+    }
+
+    const hasParcel = typeof body?.isParcelService !== "undefined";
+    const hasQuickCommerce = typeof body?.isQuickCommerceService !== "undefined";
+
+    if (hasParcel || hasQuickCommerce) {
+        const isParcelService = hasParcel ? parseBool(body.isParcelService) : false;
+        const isQuickCommerceService = hasQuickCommerce
+            ? parseBool(body.isQuickCommerceService)
+            : false;
+
+        if (!isParcelService && !isQuickCommerceService) {
+            return { error: "Select parcel service or quick orders." };
+        }
+
+        return { isParcelService, isQuickCommerceService };
+    }
+
+    return { error: "Service preference is required (parcel or quick-orders)." };
+};
+
 const SELLER_DOCUMENT_FIELDS = {
     tradeLicense: "Trade License",
     gstCertificate: "GST Certificate",
@@ -179,6 +219,11 @@ export const signupSeller = async (req, res) => {
             );
         }
 
+        const serviceFlags = resolveSellerServiceFlags(augmentedBody);
+        if (serviceFlags.error) {
+            return handleResponse(res, 400, serviceFlags.error);
+        }
+
         const sellerData = {
             name,
             email,
@@ -198,6 +243,8 @@ export const signupSeller = async (req, res) => {
             emailVerified: true,
             phoneVerified: true,
             isActive: false,
+            isParcelService: serviceFlags.isParcelService,
+            isQuickCommerceService: serviceFlags.isQuickCommerceService,
         };
 
         if (parsedLat !== undefined && parsedLng !== undefined) {

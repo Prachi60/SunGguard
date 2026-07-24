@@ -9,6 +9,8 @@ export const adminListCourierCompanies = async (req, res) => {
   try {
     // Do not auto-reseed here — otherwise deleting the last company
     // (or emptying the list) would immediately recreate defaults.
+    // The "Other" catch-all option is always ensured so the admin can set its rate.
+    await CourierCompany.ensureOtherOption();
     const companies = await CourierCompany.find()
       .sort({ sortOrder: 1, name: 1 })
       .lean();
@@ -71,7 +73,8 @@ export const adminUpdateCourierCompany = async (req, res) => {
       return handleResponse(res, 404, "Courier company not found");
     }
 
-    if (req.body?.name !== undefined) {
+    // The "Other" catch-all option keeps its fixed name — customers type their own.
+    if (req.body?.name !== undefined && !company.isOther) {
       const name = String(req.body.name || "").trim();
       if (!name) {
         return handleResponse(res, 400, "Courier company name is required");
@@ -140,10 +143,18 @@ export const adminUpdateCourierCompany = async (req, res) => {
 export const adminDeleteCourierCompany = async (req, res) => {
   try {
     const { id } = req.params;
-    const company = await CourierCompany.findByIdAndDelete(id);
-    if (!company) {
+    const existing = await CourierCompany.findById(id);
+    if (!existing) {
       return handleResponse(res, 404, "Courier company not found");
     }
+    if (existing.isOther) {
+      return handleResponse(
+        res,
+        400,
+        "The 'Other' option cannot be deleted. Deactivate it instead if you want to hide it.",
+      );
+    }
+    const company = await CourierCompany.findByIdAndDelete(id);
     return handleResponse(res, 200, "Courier company deleted", { id: company._id });
   } catch (error) {
     return handleResponse(res, 500, error.message);

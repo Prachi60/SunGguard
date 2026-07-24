@@ -12,6 +12,7 @@ import { resolveWorkflowStatus } from "./orderWorkflowService.js";
 import {
   deliveryPartnerHasActiveJob,
   markDeliveryPartnerBusy,
+  clearDeliveryPartnerBusy,
 } from "./deliveryBusyService.js";
 import logger from "./logger.js";
 
@@ -293,8 +294,7 @@ export async function fetchAvailableOrdersForDelivery({
     };
   }
 
-  const hasActiveJob =
-    deliveryPartner.isBusy || (await deliveryPartnerHasActiveJob(userId));
+  const hasActiveJob = await deliveryPartnerHasActiveJob(userId);
   if (hasActiveJob) {
     if (!deliveryPartner.isBusy) {
       await markDeliveryPartnerBusy(userId);
@@ -305,6 +305,11 @@ export async function fetchAvailableOrdersForDelivery({
       limit,
       busy: true,
     };
+  }
+
+  // Heal stale busy flag (e.g. after skip/reject left isBusy=true with no active job).
+  if (deliveryPartner.isBusy) {
+    await clearDeliveryPartnerBusy(userId);
   }
 
   if (

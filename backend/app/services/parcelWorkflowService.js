@@ -10,10 +10,52 @@ import {
   emitToDelivery,
   emitToCustomer,
   emitToAdmins,
+  emitToSeller,
 } from "./orderSocketEmitter.js";
+import { findNearestParcelSellerNearPickup, getApprovedParcelSeller } from "./sellerNearbyService.js";
 import { emitNotificationEvent } from "../modules/notifications/notification.emitter.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
 import { getRedisClient } from "../config/redis.js";
+
+async function assertRiderWithinPickupRadius(deliveryOid, parcelId) {
+  const [rider, parcel, settings] = await Promise.all([
+    Delivery.findById(deliveryOid).select("location").lean(),
+    Parcel.findById(parcelId).select("pickupAddress").lean(),
+    ParcelConfig.getSearchSettings(),
+  ]);
+
+  const pickupLat = Number(parcel?.pickupAddress?.lat);
+  const pickupLng = Number(parcel?.pickupAddress?.lng);
+  const coords = rider?.location?.coordinates;
+
+  if (
+    !parcel ||
+    !Array.isArray(coords) ||
+    coords.length < 2 ||
+    !Number.isFinite(pickupLat) ||
+    !Number.isFinite(pickupLng)
+  ) {
+    const err = new Error("Pickup or rider location is unavailable");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const [lng, lat] = coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    const err = new Error("Rider location is unavailable");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const radiusKm = settings.baseSearchRadiusKm;
+  if (distanceMeters(pickupLat, pickupLng, lat, lng) > radiusKm * 1000) {
+    const err = new Error(
+      `You must be within ${radiusKm} km of the pickup location to accept this parcel`,
+    );
+    err.statusCode = 403;
+    throw err;
+  }
+}
 
 const DEFAULT_PARCEL_SEARCH_TIMEOUT_MS = () =>
   parseInt(process.env.PARCEL_SEARCH_TIMEOUT_MS || "60000", 10);
@@ -94,6 +136,14 @@ export function parcelBroadcastPayloadFromDoc(parcel, extra = {}, settingsOrPerc
         }
       : settingsOrPercent || {};
   const earnings = computeRiderParcelEarnings(parcel, settings);
+  const paymentMethod = String(parcel.paymentMethod || "COD").toUpperCase();
+  const isCod = paymentMethod === "COD";
+  const collectAmount = isCod
+    ? Math.max(
+        0,
+        Number(parcel.codSettlement?.collectAmount) || Number(parcel.fare) || 0,
+      )
+    : 0;
   return {
     parcelId: parcel._id?.toString?.() || String(parcel._id),
     status: parcel.status,
@@ -106,6 +156,9 @@ export function parcelBroadcastPayloadFromDoc(parcel, extra = {}, settingsOrPerc
       riderDistanceFareSharePercent: settings.riderDistanceFareSharePercent,
       weight: parcel.weight,
       distance: parcel.distance,
+      deliverySpeed: parcel.deliverySpeed === "express" ? "express" : "normal",
+      paymentMethod,
+      collectAmount,
       type: "PARCEL",
     },
     searchExpiresAt: parcel.searchExpiresAt,
@@ -146,7 +199,107 @@ async function emitParcelBroadcastForPickup(parcel, extra = {}) {
   );
 }
 
+/**
+ * Attach nearest parcel-hub seller for visibility / seller panel.
+ * Does NOT mark the parcel ACCEPTED — delivery riders still need SEARCHING broadcast.
+ */
+export async function tryAutoAssignParcelToSeller(parcelDoc) {
+  const lat = Number(parcelDoc.pickupAddress?.lat);
+  const lng = Number(parcelDoc.pickupAddress?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const seller = await findNearestParcelSellerNearPickup(lat, lng);
+  if (!seller?._id) return null;
+
+  const updated = await Parcel.findOneAndUpdate(
+    {
+      _id: parcelDoc._id,
+      sellerId: null,
+      status: { $in: ["REQUESTED", "SEARCHING"] },
+    },
+    {
+      $set: {
+        sellerId: seller._id,
+      },
+    },
+    { new: true },
+  );
+
+  if (!updated) return null;
+
+  emitToSeller(String(seller._id), {
+    event: "parcel:auto-assigned",
+    payload: {
+      parcelId: String(updated._id),
+      parcel: updated,
+    },
+  });
+
+  emitToAdmins("parcel:status:update", updated);
+
+  return updated;
+}
+
+export async function fetchParcelsForSeller(sellerId) {
+  const seller = await getApprovedParcelSeller(sellerId);
+  if (!seller) return [];
+
+  const coords = seller.location?.coordinates;
+  if (!Array.isArray(coords) || coords.length < 2) {
+    return Parcel.find({ sellerId })
+      .populate("customerId", "name phone email")
+      .populate("deliveryPartnerId", "name phone")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+  }
+
+  const [sellerLng, sellerLat] = coords;
+  const radiusKm = Math.min(Math.max(Number(seller.serviceRadius) || 5, 1), 100);
+  const radiusM = radiusKm * 1000;
+
+  const [assigned, nearbyOpen] = await Promise.all([
+    Parcel.find({ sellerId })
+      .populate("customerId", "name phone email")
+      .populate("deliveryPartnerId", "name phone")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean(),
+    Parcel.find({
+      sellerId: null,
+      status: { $in: ["REQUESTED", "SEARCHING"] },
+    })
+      .populate("customerId", "name phone email")
+      .populate("deliveryPartnerId", "name phone")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean(),
+  ]);
+
+  const assignedIds = new Set(assigned.map((p) => String(p._id)));
+  const nearby = nearbyOpen.filter((parcel) => {
+    const pickupLat = Number(parcel.pickupAddress?.lat);
+    const pickupLng = Number(parcel.pickupAddress?.lng);
+    if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) return false;
+    return distanceMeters(pickupLat, pickupLng, sellerLat, sellerLng) <= radiusM;
+  });
+
+  const merged = [...assigned];
+  for (const parcel of nearby) {
+    if (!assignedIds.has(String(parcel._id))) {
+      merged.push(parcel);
+    }
+  }
+
+  return merged.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
 export async function startParcelBroadcast(parcelDoc) {
+  // Attach nearby parcel hub seller (if any), but always continue rider search.
+  await tryAutoAssignParcelToSeller(parcelDoc);
+
   const parcelId = parcelDoc._id?.toString?.() || String(parcelDoc._id);
   const now = new Date();
   const searchMs = DEFAULT_PARCEL_SEARCH_TIMEOUT_MS();
@@ -266,14 +419,13 @@ export async function fetchAvailableParcelsForRider(deliveryId) {
   if (!deliveryOid) return [];
 
   const rider = await Delivery.findById(deliveryOid)
-    .select("location isParcelService isVerified isOnline isBusy")
+    .select("location isParcelService isVerified isOnline")
     .lean();
 
   if (
     !rider?.isParcelService ||
     !rider.isVerified ||
-    !rider.isOnline ||
-    rider.isBusy
+    !rider.isOnline
   ) {
     return [];
   }
@@ -302,7 +454,7 @@ export async function fetchAvailableParcelsForRider(deliveryId) {
     if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
       return false;
     }
-    const radiusKm = parcel.searchMeta?.radiusKm ?? settings.baseSearchRadiusKm;
+    const radiusKm = settings.baseSearchRadiusKm;
     return distanceMeters(pickupLat, pickupLng, lat, lng) <= radiusKm * 1000;
   });
 }
@@ -316,7 +468,7 @@ export async function parcelAcceptAtomic(deliveryId, parcelId, idempotencyKey) {
   }
 
   const partner = await Delivery.findById(deliveryOid)
-    .select("isVerified isParcelService isBusy name phone")
+    .select("isVerified isParcelService name phone")
     .lean();
 
   if (!partner?.isVerified) {
@@ -331,11 +483,7 @@ export async function parcelAcceptAtomic(deliveryId, parcelId, idempotencyKey) {
     throw err;
   }
 
-  if (partner.isBusy) {
-    const err = new Error("You are already on an active delivery.");
-    err.statusCode = 409;
-    throw err;
-  }
+  await assertRiderWithinPickupRadius(deliveryOid, parcelId);
 
   if (idempotencyKey) {
     try {
@@ -346,6 +494,7 @@ export async function parcelAcceptAtomic(deliveryId, parcelId, idempotencyKey) {
         if (hit) {
           const parcel = await Parcel.findById(parcelId)
             .populate("customerId", "name phone")
+            .populate("sellerId", "name shopName phone address location")
             .lean();
           return { parcel, duplicate: true };
         }
@@ -375,7 +524,8 @@ export async function parcelAcceptAtomic(deliveryId, parcelId, idempotencyKey) {
     { new: true },
   )
     .populate("customerId", "name phone")
-    .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location");
+    .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage location")
+    .populate("sellerId", "name shopName phone address location");
 
   if (!updated) {
     const existing = await Parcel.findById(parcelId).lean();
@@ -403,7 +553,6 @@ export async function parcelAcceptAtomic(deliveryId, parcelId, idempotencyKey) {
     throw err;
   }
 
-  await Delivery.findByIdAndUpdate(deliveryOid, { $set: { isBusy: true } });
   clearParcelSearchTimeout(parcelId);
   await retractParcelBroadcast(String(parcelId), deliveryOid);
 

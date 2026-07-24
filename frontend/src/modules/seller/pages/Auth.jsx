@@ -24,6 +24,8 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  Package,
+  ShoppingBag as ShoppingBagIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import Lottie from "lottie-react";
@@ -47,11 +49,27 @@ const REQUIRED_DOCUMENT_CONFIG = [
   { id: "idProof", label: "ID Proof" },
 ];
 
+const SELLER_SERVICE_TYPES = [
+  {
+    value: "quick-orders",
+    label: "Quick Orders",
+    description: "Sell products & manage store orders",
+    icon: ShoppingBagIcon,
+  },
+  {
+    value: "parcel",
+    label: "Parcel Service",
+    description: "Receive parcel bookings in your service area",
+    icon: Package,
+  },
+];
+
 const Auth = () => {
   const [isLogin, setIsLogin] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [signupStep, setSignupStep] = useState(1);
+  const [signupServiceType, setSignupServiceType] = useState("");
   const [isMapOpen, setIsMapOpen] = useState(false);
   const { login } = useAuth();
   const { settings } = useSettings();
@@ -299,6 +317,10 @@ const Auth = () => {
       }
 
       if (!isLogin && signupStep < 3) {
+        if (signupStep === 1 && !signupServiceType) {
+          toast.error("Please select Quick Orders or Parcel Service.");
+          return;
+        }
         setSignupStep((prev) => prev + 1);
         return;
       }
@@ -342,6 +364,7 @@ const Auth = () => {
             lat: formData.lat,
             lng: formData.lng,
             radius: formData.radius,
+            serviceType: signupServiceType,
             emailVerificationToken: verifications.email.token,
             phoneVerificationToken: verifications.phone.token,
           }).forEach(([key, value]) => {
@@ -558,6 +581,48 @@ const Auth = () => {
                             value={formData.shopName}
                             onChange={handleChange}
                           />
+                        </div>
+                      </div>
+                    )}
+
+                    {!isLogin && (
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          What will you serve?
+                        </label>
+                        <div className="grid grid-cols-1 gap-2">
+                          {SELLER_SERVICE_TYPES.map((service) => {
+                            const Icon = service.icon;
+                            const isSelected = signupServiceType === service.value;
+                            return (
+                              <button
+                                key={service.value}
+                                type="button"
+                                onClick={() => setSignupServiceType(service.value)}
+                                className={`rounded-lg border-2 px-4 py-3 text-left transition-all flex items-center gap-3 ${
+                                  isSelected
+                                    ? "border-slate-900 bg-slate-50"
+                                    : "border-slate-100 bg-slate-50 hover:border-slate-200"
+                                }`}
+                              >
+                                <div
+                                  className={`p-2 rounded-lg ${
+                                    isSelected ? "bg-slate-900 text-white" : "bg-white text-slate-500"
+                                  }`}
+                                >
+                                  <Icon size={16} />
+                                </div>
+                                <div>
+                                  <span className="block text-xs font-black text-slate-800">
+                                    {service.label}
+                                  </span>
+                                  <span className="text-[10px] font-medium text-slate-500">
+                                    {service.description}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

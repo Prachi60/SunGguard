@@ -38,6 +38,16 @@ const courierCompanySchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    /**
+     * Marks the special "Other" catch-all option. Customers pick this and type
+     * their own courier company name; the admin only controls its platform rate.
+     * There should be exactly one such document.
+     */
+    isOther: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     sortOrder: {
       type: Number,
       default: 0,
@@ -73,11 +83,29 @@ courierCompanySchema.statics.ensureDefaults = async function () {
   );
 };
 
+/**
+ * Ensure the single "Other" catch-all courier option exists. Customers can pick
+ * it to type a custom company name while the admin sets its platform rate.
+ */
+courierCompanySchema.statics.ensureOtherOption = async function () {
+  const existing = await this.findOne({ isOther: true });
+  if (existing) return existing;
+  return this.create({
+    name: "Other",
+    platformCharge: 0,
+    companyCharge: 0,
+    sortOrder: 9999,
+    isActive: true,
+    isOther: true,
+  });
+};
+
 courierCompanySchema.statics.listActiveForBooking = async function () {
   await this.ensureDefaults();
+  await this.ensureOtherOption();
   return this.find({ isActive: true })
     .sort({ sortOrder: 1, name: 1 })
-    .select("_id name platformCharge companyCharge location")
+    .select("_id name platformCharge companyCharge location isOther")
     .lean();
 };
 

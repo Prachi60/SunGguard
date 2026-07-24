@@ -15,7 +15,7 @@ const MiniCart = () => {
 
     const path = location.pathname.replace(/\/$/, '') || '/';
 
-    // Hide MiniCart on checkout page, order details page, profile page, wallet, transactions, wishlist, addresses, support, privacy, and about page
+    // Hide MiniCart on checkout page, order details page, profile page, wallet, transactions, wishlist, addresses, support, privacy, about, and parcel pages
     const isCheckoutPage = path === '/checkout';
     const isOrderDetailsPage = path.startsWith('/orders');
     const isProfilePage = path === '/profile';
@@ -26,10 +26,11 @@ const MiniCart = () => {
     const isSupportPage = path.startsWith('/support');
     const isPrivacyPage = path.startsWith('/privacy');
     const isAboutPage = path.startsWith('/about');
+    const isParcelPage = path === '/parcel' || path.startsWith('/parcel/');
 
     return (
         <AnimatePresence>
-            {cart.length > 0 && !isCheckoutPage && !isOrderDetailsPage && !isProfilePage && !isWalletPage && !isTransactionsPage && !isWishlistPage && !isAddressesPage && !isSupportPage && !isPrivacyPage && !isAboutPage && (
+            {cart.length > 0 && !isCheckoutPage && !isOrderDetailsPage && !isProfilePage && !isWalletPage && !isTransactionsPage && !isWishlistPage && !isAddressesPage && !isSupportPage && !isPrivacyPage && !isAboutPage && !isParcelPage && (
                 <div
                     key="mini-cart-wrapper"
                     id="mini-cart-target"

@@ -160,6 +160,7 @@ export async function sellerAcceptAtomic(sellerId, orderId) {
       workflowVersion: { $gte: 2 },
       workflowStatus: WORKFLOW_STATUS.SELLER_PENDING,
       sellerPendingExpiresAt: { $gt: now },
+      cancelRequestStatus: { $nin: ["requested"] },
       $or: [
         { paymentMode: { $ne: "ONLINE" } },
         { paymentStatus: "PAID" },
@@ -745,6 +746,59 @@ export async function customerCancelV2(customerId, orderId, reason) {
     throw err;
   }
 
+  if (order.cancelRequestStatus === "requested") {
+    const err = new Error("Cancel request already pending admin approval");
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const onlinePaid =
+    String(order.paymentMode || "").toUpperCase() === "ONLINE" &&
+    (order.financeFlags?.onlinePaymentCaptured === true ||
+      String(order.paymentStatus || "").toUpperCase() === "PAID");
+
+  // Online paid: wait for admin approval before cancel + wallet refund.
+  if (onlinePaid) {
+    const pending = await Order.findOneAndUpdate(
+      {
+        orderId,
+        customer: customerId,
+        workflowStatus: WORKFLOW_STATUS.SELLER_PENDING,
+        cancelRequestStatus: { $in: ["none", "rejected", null] },
+      },
+      {
+        $set: {
+          cancelRequestStatus: "requested",
+          cancelRequestedAt: new Date(),
+          cancelReason: reason || "Cancel requested by customer",
+        },
+      },
+      { new: true },
+    );
+
+    if (!pending) {
+      const err = new Error("Unable to submit cancel request");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    emitOrderStatusUpdate(
+      orderId,
+      { cancelRequestStatus: "requested" },
+      pending.customer,
+    );
+    emitNotificationEvent(NOTIFICATION_EVENTS.ORDER_CANCELLED, {
+      orderId: pending.orderId,
+      customerId: pending.customer,
+      userId: pending.customer,
+      sellerId: pending.seller,
+      customerMessage:
+        "Cancel request submitted. After admin approval, your online payment will be credited to your wallet.",
+      sellerMessage: `Customer requested cancel for order #${pending.orderId} (awaiting admin).`,
+    });
+    return pending;
+  }
+
   const updated = await Order.findOneAndUpdate(
     {
       orderId,
@@ -757,6 +811,7 @@ export async function customerCancelV2(customerId, orderId, reason) {
         status: "cancelled",
         cancelledBy: "customer",
         cancelReason: reason || "Cancelled by customer",
+        cancelRequestStatus: "none",
       },
     },
     { new: true },

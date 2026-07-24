@@ -12,6 +12,11 @@ export const adminOrdersApi = {
     updateOrderStatus: (orderId, data) =>
         axiosInstance.put(`/orders/status/${orderId}`, data),
 
+    approveCancelRefund: (orderId) =>
+        axiosInstance.put(`/orders/cancel/${orderId}/approve-refund`),
+    rejectCancelRequest: (orderId) =>
+        axiosInstance.put(`/orders/cancel/${orderId}/reject`),
+
     getReturns: (params) =>
         axiosInstance.get('/orders/seller-returns', { params }),
     getReturnDetails: (orderId) =>

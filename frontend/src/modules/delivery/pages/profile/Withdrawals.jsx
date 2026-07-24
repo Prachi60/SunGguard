@@ -33,25 +33,33 @@ const Withdrawals = () => {
             setFetching(true);
             const res = await deliveryApi.getEarnings();
             if (res.data.success) {
+                const result = res.data.result || {};
+                const txns = Array.isArray(result.transactions)
+                    ? result.transactions
+                    : Array.isArray(result.recentTransactions)
+                        ? result.recentTransactions
+                        : [];
+                const available =
+                    Number.isFinite(Number(result.availableBalance))
+                        ? Number(result.availableBalance)
+                        : Math.max(
+                            0,
+                            Number(result.totalEarnings || 0) -
+                              Number(result.withdrawnTotal || 0) -
+                              Number(result.pendingWithdrawals || 0),
+                          );
                 setStats({
-                    availableBalance: res.data.result.totalEarnings || 0,
-                    pendingWithdrawals: (res.data.result.recentTransactions || [])
-                        .filter(t => t.type.includes('Withdrawal') && (t.status === 'Pending' || t.status === 'Processing'))
-                        .reduce((acc, t) => acc + Math.abs(t.amount), 0),
-                    history: (res.data.result.recentTransactions || [])
-                        .filter(t => t.type.includes('Withdrawal'))
+                    availableBalance: available,
+                    pendingWithdrawals: Number(result.pendingWithdrawals || 0),
+                    history: txns.filter((t) => String(t.type || "").includes("Withdrawal")),
                 });
             }
         } catch (error) {
             console.error("Fetch Error:", error);
-            // Fallback with mock data for frontend demo if API fails
             setStats({
-                availableBalance: 1250,
+                availableBalance: 0,
                 pendingWithdrawals: 0,
-                history: [
-                    { id: 'WDR123', amount: 500, status: 'Settled', date: '2024-03-20', type: 'Withdrawal' },
-                    { id: 'WDR124', amount: 300, status: 'Pending', date: '2024-03-21', type: 'Withdrawal' }
-                ]
+                history: [],
             });
         } finally {
             setFetching(false);

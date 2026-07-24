@@ -134,6 +134,16 @@ const sellerSchema = new mongoose.Schema(
       type: Number,
       default: 5, // Default 5km
     },
+    /** Parcel pickup/drop service (seller acts as parcel hub). */
+    isParcelService: {
+      type: Boolean,
+      default: false,
+    },
+    /** Quick-commerce / product orders from marketplace. */
+    isQuickCommerceService: {
+      type: Boolean,
+      default: true,
+    },
     lastLogin: Date,
   },
   { timestamps: true },

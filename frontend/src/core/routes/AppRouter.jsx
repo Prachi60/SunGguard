@@ -13,6 +13,7 @@ import { CartAnimationProvider } from '../../modules/customer/context/CartAnimat
 import { ProductDetailProvider } from '../../modules/customer/context/ProductDetailContext';
 import { LocationProvider } from '../../modules/customer/context/LocationContext';
 import ScrollToTop from '../../modules/customer/components/shared/ScrollToTop';
+import NotFoundPage from '../../shared/components/NotFoundPage';
 
 // Public Pages
 import Auth from '../../modules/seller/pages/Auth';
@@ -218,7 +219,7 @@ const AppRouter = () => {
                 },
                 {
                     path: '*',
-                    element: <Navigate to="/" replace />
+                    element: <NotFoundPage homePath="/" />,
                 }
             ]
         }

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { GoogleMap, Marker, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
 import { X, ShieldCheck, Zap, User, Phone, Package } from "lucide-react";
@@ -12,6 +12,8 @@ const getCustomerToken = createSocketTokenReader(STORAGE_KEYS.AUTH_CUSTOMER);
 const MAP_LIBRARIES = ["places"];
 const SEARCH_STATUSES = new Set(["REQUESTED", "SEARCHING"]);
 const TERMINAL_STATUSES = new Set(["DELIVERED", "CANCELLED"]);
+/** After captain collects from user, customer live tracking ends. */
+const POST_PICKUP_STATUSES = new Set(["PICKED_UP", "OUT_FOR_DELIVERY", "DELIVERED"]);
 
 const sliderTexts = [
   "Booking created. Notifying nearby captains...",
@@ -19,6 +21,40 @@ const sliderTexts = [
   "First rider to accept will be assigned to you.",
   "Broadcasted to nearby captains...",
 ];
+
+function coordsToLatLng(coords) {
+  if (!Array.isArray(coords) || coords.length < 2) return null;
+  const lng = Number(coords[0]);
+  const lat = Number(coords[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function addressToLatLng(address) {
+  if (!address) return null;
+  const lat = Number(address.lat);
+  const lng = Number(address.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function distanceMeters(from, to) {
+  if (!from || !to) return null;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(to.lat - from.lat);
+  const dLng = toRad(to.lng - from.lng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistanceAway(meters) {
+  if (!Number.isFinite(meters) || meters < 0) return null;
+  if (meters < 1000) return `${Math.round(meters)} m away`;
+  return `${(meters / 1000).toFixed(1)} km away`;
+}
 
 function getStatusUi(status) {
   switch (status) {
@@ -35,18 +71,18 @@ function getStatusUi(status) {
       };
     case "PICKED_UP":
       return {
-        title: "Parcel picked up",
-        subtitle: "Your parcel is with the captain.",
+        title: "Parcel collected",
+        subtitle: "Captain collected your parcel. Live tracking has ended.",
       };
     case "OUT_FOR_DELIVERY":
       return {
-        title: "Out for delivery",
-        subtitle: "Captain is heading to drop. Delivery OTP has been sent to the receiver phone.",
+        title: "Parcel collected",
+        subtitle: "Your parcel is with the captain. Live tracking has ended.",
       };
     case "DELIVERED":
       return {
-        title: "Delivered",
-        subtitle: "Your parcel was delivered successfully.",
+        title: "Completed",
+        subtitle: "Your parcel request is complete.",
       };
     case "CANCELLED":
       return {
@@ -71,11 +107,13 @@ function formatStatusLabel(status) {
 const ParcelSearchTrackingPage = () => {
   const navigate = useNavigate();
   const { id } = useParams();
+  const mapRef = useRef(null);
   const [parcel, setParcel] = useState(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [sliderIndex, setSliderIndex] = useState(0);
   const [directions, setDirections] = useState(null);
+  const [routeDistanceM, setRouteDistanceM] = useState(null);
 
   const { isLoaded } = useJsApiLoader({
     id: "google-map-script",
@@ -112,12 +150,27 @@ const ParcelSearchTrackingPage = () => {
     return () => clearInterval(timer);
   }, [parcel?.status]);
 
+  const riderPartnerId =
+    parcel?.deliveryPartnerId && typeof parcel.deliveryPartnerId === "object"
+      ? String(parcel.deliveryPartnerId._id || "")
+      : parcel?.deliveryPartnerId
+        ? String(parcel.deliveryPartnerId)
+        : "";
+
   useEffect(() => {
-    if (!parcel?._id || TERMINAL_STATUSES.has(parcel.status)) return undefined;
-    const pollMs = SEARCH_STATUSES.has(parcel.status) ? 3000 : 5000;
+    // Live tracking only until captain collects from user.
+    if (
+      !parcel?._id ||
+      TERMINAL_STATUSES.has(parcel.status) ||
+      POST_PICKUP_STATUSES.has(parcel.status)
+    ) {
+      return undefined;
+    }
+    // Stable deps only — populated deliveryPartner object must NOT restart the interval.
+    const pollMs = SEARCH_STATUSES.has(parcel.status) ? 8000 : riderPartnerId ? 10000 : 12000;
     const timer = setInterval(() => loadParcel(true), pollMs);
     return () => clearInterval(timer);
-  }, [parcel?._id, parcel?.status, loadParcel]);
+  }, [parcel?._id, parcel?.status, riderPartnerId, loadParcel]);
 
   useEffect(() => {
     if (!id) return undefined;
@@ -132,52 +185,128 @@ const ParcelSearchTrackingPage = () => {
       }
       if (payload?.status) {
         setParcel((prev) => (prev ? { ...prev, status: payload.status } : prev));
-        // Refresh full details (rider info) after status-only events.
-        loadParcel(true);
       }
     });
-  }, [id, loadParcel]);
+  }, [id]);
+
+  const pickupPoint = useMemo(
+    () => addressToLatLng(parcel?.pickupAddress),
+    [parcel?.pickupAddress?.lat, parcel?.pickupAddress?.lng],
+  );
+
+  const rider = parcel?.deliveryPartnerId;
+  const riderPoint = useMemo(
+    () => (typeof rider === "object" ? coordsToLatLng(rider?.location?.coordinates) : null),
+    [rider?.location?.coordinates?.[0], rider?.location?.coordinates?.[1]],
+  );
+
+  const trackingActive = Boolean(
+    parcel &&
+      !POST_PICKUP_STATUSES.has(parcel.status) &&
+      !TERMINAL_STATUSES.has(parcel.status),
+  );
+
+  const routeEndpoints = useMemo(() => {
+    if (!trackingActive || !pickupPoint || !riderPoint) return null;
+    return { origin: riderPoint, destination: pickupPoint, phase: "pickup" };
+  }, [trackingActive, riderPoint, pickupPoint]);
 
   useEffect(() => {
-    if (!isLoaded || !window.google || !parcel?.pickupAddress || !parcel?.dropAddress) return;
-    const { pickupAddress, dropAddress } = parcel;
-    if (
-      !pickupAddress?.lat ||
-      !pickupAddress?.lng ||
-      !dropAddress?.lat ||
-      !dropAddress?.lng
-    ) return;
+    if (!isLoaded || !window.google || !routeEndpoints) {
+      setDirections(null);
+      setRouteDistanceM(null);
+      return;
+    }
+
+    const { origin, destination } = routeEndpoints;
     const service = new window.google.maps.DirectionsService();
+    let cancelled = false;
+
     service.route(
       {
-        origin: { lat: Number(pickupAddress.lat), lng: Number(pickupAddress.lng) },
-        destination: { lat: Number(dropAddress.lat), lng: Number(dropAddress.lng) },
+        origin,
+        destination,
         travelMode: window.google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
+        if (cancelled) return;
         if (status === window.google.maps.DirectionsStatus.OK) {
           setDirections(result);
+          const legMeters = result?.routes?.[0]?.legs?.[0]?.distance?.value;
+          setRouteDistanceM(Number.isFinite(legMeters) ? legMeters : distanceMeters(origin, destination));
+        } else {
+          setDirections(null);
+          setRouteDistanceM(distanceMeters(origin, destination));
         }
       },
     );
-  }, [isLoaded, parcel?.pickupAddress?.lat, parcel?.pickupAddress?.lng, parcel?.dropAddress?.lat, parcel?.dropAddress?.lng]);
 
-  const mapCenter = useMemo(() => {
-    if (!parcel?.pickupAddress || !parcel?.dropAddress) {
-      return { lat: 22.7196, lng: 75.8577 };
-    }
-    return {
-      lat: (Number(parcel.pickupAddress.lat) + Number(parcel.dropAddress.lat)) / 2,
-      lng: (Number(parcel.pickupAddress.lng) + Number(parcel.dropAddress.lng)) / 2,
+    return () => {
+      cancelled = true;
     };
-  }, [parcel?.pickupAddress?.lat, parcel?.pickupAddress?.lng, parcel?.dropAddress?.lat, parcel?.dropAddress?.lng]);
+  }, [
+    isLoaded,
+    routeEndpoints?.origin?.lat,
+    routeEndpoints?.origin?.lng,
+    routeEndpoints?.destination?.lat,
+    routeEndpoints?.destination?.lng,
+    routeEndpoints?.phase,
+  ]);
 
-  const isSearching = SEARCH_STATUSES.has(parcel?.status);
+  const fitMapToPoints = useCallback((map, points) => {
+    if (!map || !window.google || !points?.length) return;
+    if (points.length === 1) {
+      map.setCenter(points[0]);
+      map.setZoom(15);
+      return;
+    }
+    const bounds = new window.google.maps.LatLngBounds();
+    points.forEach((p) => bounds.extend(p));
+    map.fitBounds(bounds, {
+      top: 110,
+      right: 40,
+      bottom: Math.round(window.innerHeight * 0.48),
+      left: 40,
+    });
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const points = trackingActive
+      ? [pickupPoint, riderPoint].filter(Boolean)
+      : pickupPoint
+        ? [pickupPoint]
+        : [];
+    const unique = [];
+    points.forEach((p) => {
+      if (!unique.some((u) => Math.abs(u.lat - p.lat) < 1e-6 && Math.abs(u.lng - p.lng) < 1e-6)) {
+        unique.push(p);
+      }
+    });
+    fitMapToPoints(map, unique);
+  }, [
+    trackingActive,
+    pickupPoint?.lat,
+    pickupPoint?.lng,
+    riderPoint?.lat,
+    riderPoint?.lng,
+    fitMapToPoints,
+  ]);
+
+  const mapCenter = pickupPoint || { lat: 22.7196, lng: 75.8577 };
+
+  const isSearching =
+    SEARCH_STATUSES.has(parcel?.status) && !parcel?.deliveryPartnerId;
   const statusUi = getStatusUi(parcel?.status);
-  const rider = parcel?.deliveryPartnerId;
   const riderName = typeof rider === "object" ? rider?.name : null;
   const riderPhone = typeof rider === "object" ? rider?.phone : null;
-  const showOtp = parcel?.status === "OUT_FOR_DELIVERY" && parcel?.otp;
+
+  const captainAwayText = useMemo(() => {
+    if (!trackingActive || !riderPoint || !pickupPoint) return null;
+    const meters = routeDistanceM ?? distanceMeters(riderPoint, pickupPoint);
+    return formatDistanceAway(meters);
+  }, [trackingActive, riderPoint, pickupPoint, routeDistanceM]);
 
   const handleCancelSearch = async () => {
     if (!parcel?._id || !isSearching || cancelling) return;
@@ -213,7 +342,12 @@ const ParcelSearchTrackingPage = () => {
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
             center={mapCenter}
-            zoom={13}
+            zoom={15}
+            onLoad={(map) => {
+              mapRef.current = map;
+              const points = [pickupPoint, riderPoint].filter(Boolean);
+              fitMapToPoints(map, points.length ? points : pickupPoint ? [pickupPoint] : []);
+            }}
             options={{
               disableDefaultUI: true,
               zoomControl: true,
@@ -221,9 +355,42 @@ const ParcelSearchTrackingPage = () => {
               mapTypeControl: false,
             }}
           >
-            {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true }} />}
-            <Marker position={{ lat: Number(parcel.pickupAddress.lat), lng: Number(parcel.pickupAddress.lng) }} />
-            <Marker position={{ lat: Number(parcel.dropAddress.lat), lng: Number(parcel.dropAddress.lng) }} />
+            {directions && trackingActive && (
+              <DirectionsRenderer
+                directions={directions}
+                options={{
+                  suppressMarkers: true,
+                  polylineOptions: {
+                    strokeColor: "#2563eb",
+                    strokeOpacity: 0.95,
+                    strokeWeight: 6,
+                  },
+                }}
+              />
+            )}
+
+            {pickupPoint && (
+              <Marker
+                position={pickupPoint}
+                label={{ text: "You", color: "white", fontWeight: "bold", fontSize: "11px" }}
+                title="Your pickup location"
+              />
+            )}
+
+            {trackingActive && riderPoint && (
+              <Marker
+                position={riderPoint}
+                icon={{
+                  path: window.google.maps.SymbolPath.CIRCLE,
+                  scale: 10,
+                  fillColor: "#ea580c",
+                  fillOpacity: 1,
+                  strokeColor: "#ffffff",
+                  strokeWeight: 3,
+                }}
+                title={riderName ? `Captain: ${riderName}` : "Delivery captain"}
+              />
+            )}
           </GoogleMap>
         ) : (
           <div className="h-full w-full bg-slate-200 animate-pulse" />
@@ -244,9 +411,19 @@ const ParcelSearchTrackingPage = () => {
 
       <div className="absolute top-5 inset-x-4 z-20 flex items-center justify-between bg-white/90 backdrop-blur-md rounded-2xl px-4 py-3 shadow">
         <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Parcel Route</p>
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+            {trackingActive && riderPoint
+              ? "Live tracking"
+              : POST_PICKUP_STATUSES.has(parcel.status)
+                ? "Tracking ended"
+                : "Parcel pickup"}
+          </p>
           <p className="text-sm font-bold text-slate-800 truncate max-w-[200px]">
-            {parcel.pickupAddress?.fullAddress}
+            {trackingActive && captainAwayText && riderPoint
+              ? `Captain is ${captainAwayText}`
+              : POST_PICKUP_STATUSES.has(parcel.status)
+                ? "Parcel handed to captain"
+                : parcel.pickupAddress?.fullAddress}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -283,7 +460,7 @@ const ParcelSearchTrackingPage = () => {
               <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3.5 mt-3.5 text-center">
                 <p className="text-[10px] uppercase font-black tracking-[0.2em] text-amber-700">Expected Price</p>
                 <p className="text-[26px] md:text-[30px] leading-none font-black text-slate-900 mt-2">
-                  Rs {Math.round(Number(parcel.fare || 0))}
+                  ₹{Number(parcel.fare || 0).toFixed(2)}
                 </p>
                 <p className="text-[12px] text-slate-500 font-semibold mt-2">
                   Estimated for about {Number(parcel.distance || 0).toFixed(1)} km.
@@ -314,13 +491,17 @@ const ParcelSearchTrackingPage = () => {
                 <div>
                   <p className="text-[10px] uppercase font-black tracking-[0.2em] text-slate-400">Fare</p>
                   <p className="text-xl font-black text-slate-900 mt-1">
-                    Rs {Math.round(Number(parcel.fare || 0))}
+                    ₹{Number(parcel.fare || 0).toFixed(2)}
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[10px] uppercase font-black tracking-[0.2em] text-slate-400">Distance</p>
+                  <p className="text-[10px] uppercase font-black tracking-[0.2em] text-slate-400">
+                    {trackingActive && captainAwayText ? "Captain distance" : "Trip distance"}
+                  </p>
                   <p className="text-sm font-bold text-slate-700 mt-1">
-                    {Number(parcel.distance || 0).toFixed(1)} km
+                    {trackingActive && captainAwayText
+                      ? captainAwayText
+                      : `${Number(parcel.distance || 0).toFixed(1)} km`}
                   </p>
                 </div>
               </div>
@@ -333,9 +514,19 @@ const ParcelSearchTrackingPage = () => {
                   <div className="min-w-0">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Delivery captain</p>
                     <p className="text-sm font-black text-slate-900 truncate">{riderName}</p>
-                    {riderPhone && (
+                    {riderPhone && trackingActive && (
                       <p className="text-xs text-slate-500 font-semibold flex items-center gap-1 mt-0.5">
                         <Phone size={11} /> {riderPhone}
+                      </p>
+                    )}
+                    {trackingActive && captainAwayText && (
+                      <p className="text-xs text-orange-600 font-bold mt-1">
+                        Coming to you · {captainAwayText}
+                      </p>
+                    )}
+                    {POST_PICKUP_STATUSES.has(parcel.status) && (
+                      <p className="text-xs text-emerald-600 font-bold mt-1">
+                        Parcel collected · live tracking ended
                       </p>
                     )}
                   </div>
@@ -346,12 +537,16 @@ const ParcelSearchTrackingPage = () => {
                 </div>
               )}
 
-              {showOtp && (
+              {trackingActive && parcel.otp && (
                 <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3.5 text-center">
-                  <p className="text-[10px] uppercase font-black tracking-[0.2em] text-emerald-700">Delivery OTP</p>
-                  <p className="text-3xl font-black tracking-[0.25em] text-emerald-900 mt-1">{parcel.otp}</p>
+                  <p className="text-[10px] uppercase font-black tracking-[0.2em] text-emerald-700">
+                    Pickup OTP
+                  </p>
+                  <p className="text-3xl font-black tracking-[0.25em] text-emerald-900 mt-1">
+                    {parcel.otp}
+                  </p>
                   <p className="text-[11px] text-emerald-700 font-semibold mt-1">
-                    OTP sent to receiver {parcel.dropAddress?.phone || ""}. Receiver must share it with the captain.
+                    Share this OTP only with your delivery captain when they collect the parcel.
                   </p>
                 </div>
               )}
@@ -368,7 +563,13 @@ const ParcelSearchTrackingPage = () => {
             </button>
           ) : (
             <button
-              onClick={() => navigate("/parcel")}
+              onClick={() =>
+                navigate(
+                  TERMINAL_STATUSES.has(parcel.status)
+                    ? "/parcel"
+                    : "/profile/parcel-history",
+                )
+              }
               className="w-full mt-4 py-3 rounded-2xl bg-slate-900 text-white font-black uppercase tracking-wider"
             >
               {TERMINAL_STATUSES.has(parcel.status) ? "Back to Parcel" : "Open Parcel History"}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   MapPin,
@@ -27,7 +27,9 @@ const formatParcelStatusLabel = (status) => {
 
 const libraries = ['places'];
 
-const LiveTrackingMap = ({ pickupAddress, dropAddress, deliveryPartner }) => {
+const TO_PICKUP_STATUSES = new Set(["ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED"]);
+
+const LiveTrackingMap = ({ pickupAddress, deliveryPartner, status }) => {
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
@@ -35,26 +37,65 @@ const LiveTrackingMap = ({ pickupAddress, dropAddress, deliveryPartner }) => {
   });
 
   const [directions, setDirections] = useState(null);
+  const mapRef = useRef(null);
+
+  const pickupPos =
+    pickupAddress?.lat != null && pickupAddress?.lng != null
+      ? { lat: Number(pickupAddress.lat), lng: Number(pickupAddress.lng) }
+      : null;
+
+  const trackingActive = TO_PICKUP_STATUSES.has(status) || status === 'REQUESTED' || status === 'SEARCHING';
+
+  const riderCoordinates = deliveryPartner?.location?.coordinates;
+  const riderPos =
+    trackingActive &&
+    Array.isArray(riderCoordinates) &&
+    riderCoordinates.length === 2
+      ? { lat: Number(riderCoordinates[1]), lng: Number(riderCoordinates[0]) }
+      : null;
 
   useEffect(() => {
-    if (!isLoaded || !window.google) return;
+    if (!isLoaded || !window.google || !riderPos || !pickupPos || !trackingActive) {
+      setDirections(null);
+      return;
+    }
 
     const directionsService = new window.google.maps.DirectionsService();
+    let cancelled = false;
     directionsService.route(
       {
-        origin: { lat: Number(pickupAddress.lat), lng: Number(pickupAddress.lng) },
-        destination: { lat: Number(dropAddress.lat), lng: Number(dropAddress.lng) },
+        origin: riderPos,
+        destination: pickupPos,
         travelMode: window.google.maps.TravelMode.DRIVING,
       },
-      (result, status) => {
-        if (status === window.google.maps.DirectionsStatus.OK) {
+      (result, statusCode) => {
+        if (cancelled) return;
+        if (statusCode === window.google.maps.DirectionsStatus.OK) {
           setDirections(result);
         } else {
-          console.error(`Directions request failed: ${status}`);
+          setDirections(null);
         }
       },
     );
-  }, [isLoaded, pickupAddress.lat, pickupAddress.lng, dropAddress.lat, dropAddress.lng]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, riderPos?.lat, riderPos?.lng, pickupPos?.lat, pickupPos?.lng, trackingActive]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !window.google) return;
+    const points = [pickupPos, riderPos].filter(Boolean);
+    if (!points.length) return;
+    if (points.length === 1) {
+      map.setCenter(points[0]);
+      map.setZoom(15);
+      return;
+    }
+    const bounds = new window.google.maps.LatLngBounds();
+    points.forEach((p) => bounds.extend(p));
+    map.fitBounds(bounds, 48);
+  }, [pickupPos?.lat, pickupPos?.lng, riderPos?.lat, riderPos?.lng]);
 
   if (!isLoaded) {
     return (
@@ -72,59 +113,57 @@ const LiveTrackingMap = ({ pickupAddress, dropAddress, deliveryPartner }) => {
     fullscreenControl: false,
   };
 
-  const center = {
-    lat: (Number(pickupAddress.lat) + Number(dropAddress.lat)) / 2,
-    lng: (Number(pickupAddress.lng) + Number(dropAddress.lng)) / 2,
-  };
-
-  const riderCoordinates = deliveryPartner?.location?.coordinates;
-  const riderPos =
-    Array.isArray(riderCoordinates) && riderCoordinates.length === 2
-      ? { lat: Number(riderCoordinates[1]), lng: Number(riderCoordinates[0]) }
-      : null;
+  const center = pickupPos || { lat: 22.7196, lng: 75.8577 };
 
   return (
     <div className="rounded-3xl overflow-hidden border border-slate-100 shadow-md relative h-64 md:h-80 w-full z-10">
       <GoogleMap
         mapContainerStyle={{ width: '100%', height: '100%' }}
         center={center}
-        zoom={12}
+        zoom={14}
+        onLoad={(map) => {
+          mapRef.current = map;
+        }}
         options={mapOptions}
       >
-        {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true }} />}
+        {directions && trackingActive && (
+          <DirectionsRenderer
+            directions={directions}
+            options={{
+              suppressMarkers: true,
+              polylineOptions: {
+                strokeColor: '#2563eb',
+                strokeOpacity: 0.95,
+                strokeWeight: 5,
+              },
+            }}
+          />
+        )}
 
-        <Marker
-          position={{ lat: Number(pickupAddress.lat), lng: Number(pickupAddress.lng) }}
-          label={{
-            text: 'P',
-            color: 'white',
-            fontWeight: 'black',
-          }}
-          title={`Pickup: ${pickupAddress.fullAddress}`}
-        />
-
-        <Marker
-          position={{ lat: Number(dropAddress.lat), lng: Number(dropAddress.lng) }}
-          label={{
-            text: 'D',
-            color: 'white',
-            fontWeight: 'black',
-          }}
-          title={`Dropoff: ${dropAddress.fullAddress}`}
-        />
+        {pickupPos && (
+          <Marker
+            position={pickupPos}
+            label={{
+              text: 'You',
+              color: 'white',
+              fontWeight: 'black',
+            }}
+            title={`Pickup: ${pickupAddress.fullAddress}`}
+          />
+        )}
 
         {riderPos && (
           <Marker
             position={riderPos}
             icon={{
               path: window.google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: '#3b82f6',
+              scale: 9,
+              fillColor: '#ea580c',
               fillOpacity: 1,
               strokeColor: '#ffffff',
               strokeWeight: 2,
             }}
-            title={`Rider: ${deliveryPartner.name}`}
+            title={`Rider: ${deliveryPartner?.name || 'Captain'}`}
           />
         )}
       </GoogleMap>
@@ -168,30 +207,36 @@ const ParcelHistoryPage = () => {
     }
   };
 
+  const trackingId = trackingParcel?._id ? String(trackingParcel._id) : null;
+  const trackingStatus = trackingParcel?.status;
+  const isTerminalTracking =
+    trackingStatus === 'DELIVERED' || trackingStatus === 'CANCELLED';
+
+  // Backup poll only — do not depend on full parcel object (that restarts the timer
+  // on every response and causes repeated /parcel/track calls).
   useEffect(() => {
-    if (!trackingParcel) return;
-    if (trackingParcel.status === 'DELIVERED' || trackingParcel.status === 'CANCELLED') return;
+    if (!trackingId || isTerminalTracking) return undefined;
 
     const interval = setInterval(async () => {
       try {
-        const response = await parcelApi.trackParcel(trackingParcel._id);
+        const response = await parcelApi.trackParcel(trackingId);
         if (response.data && response.data.success) {
           setTrackingParcel(response.data.result);
         }
       } catch (err) {
         console.error('Failed to poll tracking status', err);
       }
-    }, 5000);
+    }, 12000);
 
     return () => clearInterval(interval);
-  }, [trackingParcel]);
+  }, [trackingId, isTerminalTracking]);
 
   useEffect(() => {
-    if (!trackingParcel?._id) return undefined;
+    if (!trackingId) return undefined;
     const getToken = getCustomerToken;
     getOrderSocket(getToken);
     return onParcelStatusUpdate(getToken, (payload) => {
-      if (!payload?.parcelId || payload.parcelId !== trackingParcel._id) return;
+      if (!payload?.parcelId || String(payload.parcelId) !== trackingId) return;
       if (payload.parcel) {
         setTrackingParcel(payload.parcel);
         return;
@@ -200,7 +245,7 @@ const ParcelHistoryPage = () => {
         setTrackingParcel((prev) => (prev ? { ...prev, status: payload.status } : prev));
       }
     });
-  }, [trackingParcel?._id]);
+  }, [trackingId]);
 
   return (
     <div className="min-h-screen bg-slate-50 pb-8 font-sans">
@@ -262,19 +307,26 @@ const ParcelHistoryPage = () => {
                         <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                           ID: ...{parcel._id.slice(-6)}
                         </span>
-                        <span
-                          className={`text-xs font-extrabold px-3 py-1 rounded-full uppercase ${
-                            parcel.status === 'DELIVERED'
-                              ? 'bg-green-100 text-green-700'
-                              : parcel.status === 'CANCELLED'
-                                ? 'bg-red-100 text-red-600'
-                                : parcel.status === 'SEARCHING'
-                                  ? 'bg-amber-100 text-amber-700 animate-pulse'
-                                  : 'bg-blue-100 text-blue-700 animate-pulse'
-                          }`}
-                        >
-                          {formatParcelStatusLabel(parcel.status)}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {parcel.deliverySpeed === 'express' ? (
+                            <span className="text-[10px] font-extrabold px-2 py-1 rounded-full uppercase bg-amber-100 text-amber-800">
+                              Express
+                            </span>
+                          ) : null}
+                          <span
+                            className={`text-xs font-extrabold px-3 py-1 rounded-full uppercase ${
+                              parcel.status === 'DELIVERED'
+                                ? 'bg-green-100 text-green-700'
+                                : parcel.status === 'CANCELLED'
+                                  ? 'bg-red-100 text-red-600'
+                                  : parcel.status === 'SEARCHING'
+                                    ? 'bg-amber-100 text-amber-700 animate-pulse'
+                                    : 'bg-blue-100 text-blue-700 animate-pulse'
+                            }`}
+                          >
+                            {formatParcelStatusLabel(parcel.status)}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="space-y-2">
@@ -299,7 +351,9 @@ const ParcelHistoryPage = () => {
                     <div className="border-t border-slate-100 pt-3 flex justify-between items-center">
                       <div>
                         <span className="text-[10px] text-slate-400 font-bold block uppercase">Fare</span>
-                        <span className="text-base font-black text-slate-900">₹{parcel.fare}</span>
+                        <span className="text-base font-black text-slate-900">
+                          ₹{Number(parcel.fare || 0).toFixed(2)}
+                        </span>
                       </div>
 
                       <button
@@ -355,20 +409,21 @@ const ParcelHistoryPage = () => {
 
             <LiveTrackingMap
               pickupAddress={trackingParcel.pickupAddress}
-              dropAddress={trackingParcel.dropAddress}
               deliveryPartner={trackingParcel.deliveryPartnerId}
+              status={trackingParcel.status}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 lg:gap-8">
               <div className="space-y-6">
-                {trackingParcel.status !== 'DELIVERED' && trackingParcel.status !== 'CANCELLED' && (
+                {['ACCEPTED', 'RIDER_ASSIGNED', 'PICKUP_REACHED'].includes(trackingParcel.status) &&
+                  trackingParcel.otp && (
                   <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl p-5 text-white flex justify-between items-center shadow-md">
                     <div>
                       <span className="text-[10px] font-black uppercase text-white/70 tracking-widest">
-                        Delivery Verification OTP
+                        Pickup OTP
                       </span>
                       <p className="text-xs text-white/90 font-medium mt-1">
-                        Share this OTP with the rider to verify delivery completion.
+                        Share this OTP with the captain when they collect your parcel.
                       </p>
                     </div>
                     <div className="text-3xl font-black tracking-widest bg-white/10 px-4 py-2 rounded-xl border border-white/20">
@@ -388,18 +443,9 @@ const ParcelHistoryPage = () => {
                       { key: 'ACCEPTED', label: 'Accepted', desc: 'Rider confirmed acceptance.' },
                       { key: 'RIDER_ASSIGNED', label: 'Rider Assigned', desc: 'Rider is on the way.' },
                       { key: 'PICKUP_REACHED', label: 'Rider Reached Pickup', desc: 'Rider reached the pickup point.' },
-                      { key: 'PICKED_UP', label: 'Picked Up', desc: 'Rider has picked up the packet.' },
-                      {
-                        key: 'OUT_FOR_DELIVERY',
-                        label: 'Out for Delivery',
-                        desc: 'Rider is heading to drop location.',
-                      },
-                      {
-                        key: 'DELIVERED',
-                        label: 'Delivered Successfully',
-                        desc: 'Packet delivered to dropoff location.',
-                      },
+                      { key: 'PICKED_UP', label: 'Picked Up', desc: 'Captain collected your parcel. Tracking ended.' },
                     ].map((step) => {
+                      // Customer timeline ends at pickup — hub drop / delivered are rider-only.
                       const statuses = [
                         'REQUESTED',
                         'SEARCHING',
@@ -407,10 +453,13 @@ const ParcelHistoryPage = () => {
                         'RIDER_ASSIGNED',
                         'PICKUP_REACHED',
                         'PICKED_UP',
-                        'OUT_FOR_DELIVERY',
-                        'DELIVERED',
                       ];
-                      const currentIdx = statuses.indexOf(trackingParcel.status);
+                      const displayStatus =
+                        trackingParcel.status === 'OUT_FOR_DELIVERY' ||
+                        trackingParcel.status === 'DELIVERED'
+                          ? 'PICKED_UP'
+                          : trackingParcel.status;
+                      const currentIdx = statuses.indexOf(displayStatus);
                       const stepIdx = statuses.indexOf(step.key);
                       const isDone = stepIdx <= currentIdx && trackingParcel.status !== 'CANCELLED';
                       const isCurrent = stepIdx === currentIdx && trackingParcel.status !== 'CANCELLED';
@@ -483,6 +532,8 @@ const ParcelHistoryPage = () => {
                             <span className="font-bold">
                               {trackingParcel.pickupWindow === 'today'
                                 ? 'Today only'
+                                : trackingParcel.pickupWindow === 'custom_days'
+                                  ? `Booked for ${trackingParcel.pickupWindowDays || trackingParcel.fareBreakdown?.billableDays || ''} days`
                                 : trackingParcel.pickupWindow === '7_days'
                                   ? 'Booked for 7 days'
                                   : trackingParcel.pickupWindow === '15_days'
@@ -494,8 +545,7 @@ const ParcelHistoryPage = () => {
                                         : 'Scheduled'}
                               {' · '}
                               {trackingParcel.pickupWindow &&
-                              trackingParcel.pickupWindow !== 'specific' &&
-                              trackingParcel.pickupWindow !== 'today'
+                              !['specific', 'today'].includes(trackingParcel.pickupWindow)
                                 ? `till ${new Date(trackingParcel.preferredPickupDate).toLocaleDateString('en-IN', {
                                     day: 'numeric',
                                     month: 'short',

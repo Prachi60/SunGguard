@@ -17,6 +17,29 @@ const packageTypeSchema = new mongoose.Schema(
   { _id: false },
 );
 
+/** Segments a package category can belong to. */
+export const PACKAGE_SEGMENTS = ["personal", "business"];
+
+/** Default customer package categories grouped by Personal / Business segment. */
+export const DEFAULT_PACKAGE_CATEGORIES = [
+  { value: "personal_gift", label: "Gift", segment: "personal", isActive: true },
+  { value: "personal_documents", label: "Personal Documents", segment: "personal", isActive: true },
+  { value: "personal_clothing", label: "Clothing", segment: "personal", isActive: true },
+  { value: "business_invoice", label: "Invoice / Bills", segment: "business", isActive: true },
+  { value: "business_samples", label: "Product Samples", segment: "business", isActive: true },
+  { value: "business_documents", label: "Business Documents", segment: "business", isActive: true },
+];
+
+const packageCategorySchema = new mongoose.Schema(
+  {
+    value: { type: String, required: true, trim: true },
+    label: { type: String, required: true, trim: true },
+    segment: { type: String, enum: PACKAGE_SEGMENTS, default: "personal" },
+    isActive: { type: Boolean, default: true },
+  },
+  { _id: false },
+);
+
 const parcelConfigSchema = new mongoose.Schema(
   {
     baseFare: {
@@ -77,11 +100,22 @@ const parcelConfigSchema = new mongoose.Schema(
       type: [packageTypeSchema],
       default: () => DEFAULT_PACKAGE_TYPES.map((t) => ({ ...t })),
     },
+    /** Customer package categories, each tied to a Personal/Business segment. */
+    packageCategories: {
+      type: [packageCategorySchema],
+      default: () => DEFAULT_PACKAGE_CATEGORIES.map((c) => ({ ...c })),
+    },
     maxWeightKg: {
       type: Number,
       default: 1,
       min: 0.1,
       max: 50,
+    },
+    /** Extra charge when customer selects Express delivery speed. */
+    expressCharge: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     packageDescriptionPlaceholder: {
       type: String,
@@ -131,6 +165,35 @@ function normalizePackageTypes(list) {
   return out.length ? out : DEFAULT_PACKAGE_TYPES.map((t) => ({ ...t }));
 }
 
+function normalizePackageCategories(list) {
+  if (!Array.isArray(list)) {
+    return DEFAULT_PACKAGE_CATEGORIES.map((c) => ({ ...c }));
+  }
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const label = String(item?.label || "").trim();
+    const segment = item?.segment === "business" ? "business" : "personal";
+    let value = String(item?.value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (!label) continue;
+    if (!value) {
+      value = `${segment}_${label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")}`;
+    }
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push({ value, label, segment, isActive: item?.isActive !== false });
+  }
+  // Empty list is allowed (admin may disable categories entirely).
+  return out;
+}
+
 // Helper static method to get the singleton config or create default
 parcelConfigSchema.statics.getOrCreate = async function () {
   let config = await this.findOne();
@@ -145,7 +208,9 @@ parcelConfigSchema.statics.getOrCreate = async function () {
       riderBaseFareSharePercent: 80,
       riderDistanceFareSharePercent: 80,
       packageTypes: DEFAULT_PACKAGE_TYPES.map((t) => ({ ...t })),
+      packageCategories: DEFAULT_PACKAGE_CATEGORIES.map((c) => ({ ...c })),
       maxWeightKg: 1,
+      expressCharge: 0,
       packageDescriptionPlaceholder: "E.g. keys, critical document papers...",
     });
     return config;
@@ -154,6 +219,11 @@ parcelConfigSchema.statics.getOrCreate = async function () {
   let dirty = false;
   if (!Array.isArray(config.packageTypes) || config.packageTypes.length === 0) {
     config.packageTypes = DEFAULT_PACKAGE_TYPES.map((t) => ({ ...t }));
+    dirty = true;
+  }
+  // Seed defaults for docs created before categories existed.
+  if (!Array.isArray(config.packageCategories)) {
+    config.packageCategories = DEFAULT_PACKAGE_CATEGORIES.map((c) => ({ ...c }));
     dirty = true;
   }
   if (config.maxWeightKg == null || config.maxWeightKg <= 0 || Number(config.maxWeightKg) === 5) {
@@ -169,17 +239,27 @@ parcelConfigSchema.statics.getOrCreate = async function () {
 };
 
 parcelConfigSchema.statics.normalizePackageTypes = normalizePackageTypes;
+parcelConfigSchema.statics.normalizePackageCategories = normalizePackageCategories;
 
 parcelConfigSchema.statics.getPublicBookingConfig = async function () {
   const config = await this.getOrCreate();
   const packageTypes = (config.packageTypes || [])
     .filter((t) => t?.isActive !== false)
     .map((t) => ({ value: t.value, label: t.label }));
+  const packageCategories = (config.packageCategories || [])
+    .filter((c) => c?.isActive !== false)
+    .map((c) => ({
+      value: c.value,
+      label: c.label,
+      segment: c.segment === "business" ? "business" : "personal",
+    }));
   return {
     packageTypes: packageTypes.length
       ? packageTypes
       : DEFAULT_PACKAGE_TYPES.map(({ value, label }) => ({ value, label })),
+    packageCategories,
     maxWeightKg: Math.min(50, Math.max(0.1, Number(config.maxWeightKg) || 1)),
+    expressCharge: Math.round((Math.max(0, Number(config.expressCharge) || 0) + Number.EPSILON) * 100) / 100,
     packageDescriptionPlaceholder:
       config.packageDescriptionPlaceholder ||
       "E.g. keys, critical document papers...",

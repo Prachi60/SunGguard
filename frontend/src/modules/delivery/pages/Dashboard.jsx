@@ -86,7 +86,10 @@ const Dashboard = () => {
       return;
     }
     try {
-      const response = await deliveryApi.getAvailableOrders({ type: activeTab });
+      const response = await deliveryApi.getAvailableOrders(
+        { type: activeTab },
+        { ttl: 20000 },
+      );
       if (response.data.success) {
         const orders = response.data.results || response.data.result || [];
         setAvailableOrders(orders);
@@ -98,11 +101,11 @@ const Dashboard = () => {
 
   const fetchAssignedParcel = useCallback(async (force = false) => {
     const now = Date.now();
-    if (!force && now - assignedParcelRequestRef.current.lastFetchedAt < 12000) return;
+    if (!force && now - assignedParcelRequestRef.current.lastFetchedAt < 30000) return;
     if (assignedParcelRequestRef.current.inFlight) return;
     assignedParcelRequestRef.current.inFlight = true;
     try {
-      const res = await parcelApi.riderGetAssigned({ ttl: 12000 });
+      const res = await parcelApi.riderGetAssigned({ ttl: 30000, forceRefresh: force });
       if (!res.data?.success) return;
       const list = res.data.results || res.data.result || [];
       const active = list.find(
@@ -120,11 +123,16 @@ const Dashboard = () => {
   useEffect(() => {
     fetchStats();
     fetchNotifications();
+  }, []);
+
+  useEffect(() => {
     if (isOnline && activeTab === "delivery") {
       fetchAssignedParcel();
     }
     if (isOnline && !user?.isBusy) fetchAvailableOrders();
     else if (user?.isBusy) setAvailableOrders([]);
+    // Layout already polls available for offer modals; this only fills the dashboard list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: avoid user-object churn
   }, [isOnline, activeTab, user?.isBusy, fetchAssignedParcel]);
 
   const handleOnlineToggle = async () => {
@@ -313,6 +321,23 @@ const Dashboard = () => {
                 <p className="text-[10px] font-black uppercase tracking-wider text-brand-600">Active Parcel Task</p>
                 <p className="text-sm font-bold text-slate-900">Continue parcel workflow</p>
                 <p className="text-xs text-slate-500 mt-0.5">Status: {assignedParcel.status}</p>
+                {assignedParcel.deliverySpeed === "express" ? (
+                  <span className="mt-1.5 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-800">
+                    Express · 10 min
+                  </span>
+                ) : (
+                  <span className="mt-1.5 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-slate-600">
+                    Normal · 30 min
+                  </span>
+                )}
+                {String(assignedParcel.paymentMethod).toUpperCase() === "COD" && (
+                  <p className="text-xs font-black text-amber-700 mt-1.5">
+                    Collect COD ₹
+                    {Number(
+                      assignedParcel.codSettlement?.collectAmount || assignedParcel.fare || 0,
+                    ).toFixed(2)}
+                  </p>
+                )}
               </div>
               <Button
                 variant="primary"

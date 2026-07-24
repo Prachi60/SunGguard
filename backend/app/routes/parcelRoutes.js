@@ -3,6 +3,7 @@ import { verifyToken, allowRoles } from "../middleware/authMiddleware.js";
 import {
   calculateFare,
   createParcel,
+  verifyParcelPayment,
   getBookingConfig,
   getParcelHistory,
   trackParcel,
@@ -22,8 +23,13 @@ import {
   riderRejectParcel,
   riderUpdateStatus,
   riderCompleteDelivery,
-  riderGetEarnings
+  riderGetEarnings,
+  sellerGetParcels,
+  sellerConfirmCodReceived,
+  sellerCreateCodRemitPayment,
+  sellerVerifyCodRemitPayment,
 } from "../controller/parcelController.js";
+import { requireApprovedSeller } from "../middleware/authMiddleware.js";
 import {
   adminListCourierCompanies,
   adminCreateCourierCompany,
@@ -38,6 +44,7 @@ const router = express.Router();
    ========================================================================== */
 router.post("/calculate-fare", verifyToken, calculateFare);
 router.post("/create", verifyToken, createParcel);
+router.post("/verify-payment", verifyToken, verifyParcelPayment);
 router.get("/booking-config", verifyToken, getBookingConfig);
 router.get("/history", verifyToken, getParcelHistory);
 router.get("/track/:id", verifyToken, trackParcel);
@@ -95,5 +102,37 @@ router.post("/rider/reject/:parcelId", verifyToken, allowRoles("delivery"), ride
 router.put("/rider/status", verifyToken, allowRoles("delivery"), riderUpdateStatus);
 router.put("/rider/complete", verifyToken, allowRoles("delivery"), riderCompleteDelivery);
 router.get("/rider/earnings", verifyToken, allowRoles("delivery"), riderGetEarnings);
+
+/* ==========================================================================
+   PARCEL HUB SELLER API ROUTES
+   ========================================================================== */
+router.get(
+  "/seller/parcels",
+  verifyToken,
+  allowRoles("seller"),
+  requireApprovedSeller,
+  sellerGetParcels,
+);
+router.post(
+  "/seller/cod/confirm",
+  verifyToken,
+  allowRoles("seller"),
+  requireApprovedSeller,
+  sellerConfirmCodReceived,
+);
+router.post(
+  "/seller/cod/remit/create",
+  verifyToken,
+  allowRoles("seller"),
+  requireApprovedSeller,
+  sellerCreateCodRemitPayment,
+);
+router.post(
+  "/seller/cod/remit/verify",
+  verifyToken,
+  allowRoles("seller"),
+  requireApprovedSeller,
+  sellerVerifyCodRemitPayment,
+);
 
 export default router;

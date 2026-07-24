@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useRef 
 import { customerApi } from "../services/customerApi";
 import { useAuth } from "../../../core/context/AuthContext";
 import { getJSON, setJSON, remove as removeStorage, STORAGE_KEYS } from "@core/utils/storage";
+import { getStoredAuthToken } from "@core/utils/authStorage";
 
 const CartContext = createContext();
 
@@ -14,11 +15,22 @@ const loadGuestCart = () => {
   return parsed;
 };
 
+const hasCustomerSession = () =>
+  Boolean(
+    getStoredAuthToken(STORAGE_KEYS.AUTH_CUSTOMER) ||
+      getStoredAuthToken(STORAGE_KEYS.AUTH_LEGACY),
+  );
+
 export const useCart = () => useContext(CartContext);
 
 export const CartProvider = ({ children }) => {
   const { isAuthenticated } = useAuth();
-  const [cart, setCart] = useState(() => loadGuestCart());
+  // Authenticated users must not hydrate from guest localStorage — that
+  // caused leftover guest items to flash (or briefly look "default") on
+  // /checkout before the backend cart response arrived.
+  const [cart, setCart] = useState(() =>
+    hasCustomerSession() ? [] : loadGuestCart(),
+  );
 
   const [loading, setLoading] = useState(false);
   const pendingRequestsRef = React.useRef(0);

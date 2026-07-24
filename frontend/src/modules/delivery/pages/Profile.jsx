@@ -15,6 +15,7 @@ import {
   IndianRupee,
   ChevronDown,
   ChevronUp,
+  Wallet,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import Button from "@/shared/components/ui/Button";
@@ -32,6 +33,8 @@ const Profile = () => {
   const appName = settings?.appName || "App";
   const [faqs, setFaqs] = useState([]);
   const [stats, setStats] = useState(null);
+  const [wallet, setWallet] = useState(null);
+  const [earningsTotal, setEarningsTotal] = useState(0);
 
   const formatDate = (value) => {
     if (!value) return "N/A";
@@ -81,9 +84,43 @@ const Profile = () => {
       .catch(() => {
         setStats(null);
       });
+    deliveryApi.getEarnings()
+      .then((res) => {
+        if (res.data?.success) {
+          const result = res.data.result || {};
+          setEarningsTotal(Number(result.totalEarnings || 0));
+          setWallet({
+            availableBalance: Number(
+              result.availableBalance ??
+                Math.max(
+                  0,
+                  Number(result.totalEarnings || 0) -
+                    Number(result.withdrawnTotal || 0) -
+                    Number(result.pendingWithdrawals || 0),
+                ),
+            ),
+            totalDebited: Number(result.withdrawnTotal || 0),
+            cashInHand: Number(result.cashCollected || 0),
+            pendingBalance: Number(result.pendingWithdrawals || 0),
+          });
+        }
+      })
+      .catch(() => {
+        setEarningsTotal(0);
+        setWallet(null);
+      });
   }, [refreshUser]);
 
   const menuItems = [
+    {
+      icon: Wallet,
+      label: "Wallet",
+      sub: earningsTotal > 0 || wallet
+        ? `Available ₹${Number(wallet?.availableBalance ?? earningsTotal ?? 0).toLocaleString("en-IN")}`
+        : "Balance, COD cash & withdrawals",
+      color: "text-emerald-600 bg-emerald-50",
+      path: "/delivery/profile/wallet",
+    },
     {
       icon: User,
       label: "Personal Details",
@@ -240,6 +277,44 @@ const Profile = () => {
           </p>
         </div>
       </motion.div>
+
+      {/* Wallet Section */}
+      <motion.button
+        type="button"
+        initial={{ y: 16, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.25 }}
+        onClick={() => navigate("/delivery/profile/wallet")}
+        className="mx-6 mb-6 block w-auto max-w-lg text-left rounded-2xl p-4 shadow-lg relative z-10 overflow-hidden"
+        style={{
+          background:
+            "linear-gradient(to bottom right, var(--brand-900), var(--brand-600))",
+        }}
+      >
+        <div className="absolute top-0 right-0 w-28 h-28 bg-white/10 rounded-full blur-2xl -translate-y-1/3 translate-x-1/4" />
+        <div className="relative z-10 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Wallet size={16} className="text-white/90" />
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/80">
+                Available Balance
+              </p>
+            </div>
+            <p className="text-2xl font-extrabold text-white tracking-tight">
+              ₹{Number(wallet?.availableBalance ?? earningsTotal ?? 0).toLocaleString("en-IN")}
+            </p>
+            <p className="text-[11px] text-white/75 mt-1">
+              Earned ₹{Number(earningsTotal || 0).toLocaleString("en-IN")}
+              {" · "}
+              Withdrawn ₹{Number(wallet?.totalDebited || 0).toLocaleString("en-IN")}
+            </p>
+          </div>
+          <div className="shrink-0 flex items-center gap-1 bg-white/15 text-white px-3 py-2 rounded-full text-xs font-bold border border-white/20">
+            Open
+            <ChevronRight size={14} />
+          </div>
+        </div>
+      </motion.button>
 
       {/* Menu Options */}
       <motion.div

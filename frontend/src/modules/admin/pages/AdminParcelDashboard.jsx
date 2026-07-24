@@ -17,6 +17,7 @@ import {
   Save,
   ArrowRight,
   Building2,
+  Zap,
   Plus,
   Pencil,
   Trash2,
@@ -193,6 +194,7 @@ const AdminParcelDashboard = () => {
   const [courierSaving, setCourierSaving] = useState(false);
   const [courierEditModalOpen, setCourierEditModalOpen] = useState(false);
   const [editingCourierId, setEditingCourierId] = useState(null);
+  const [editingCourierIsOther, setEditingCourierIsOther] = useState(false);
   const [courierToDelete, setCourierToDelete] = useState(null);
   const [courierDeleting, setCourierDeleting] = useState(false);
   const courierEditScrollRef = useRef(null);
@@ -273,17 +275,12 @@ const AdminParcelDashboard = () => {
     radiusMultiplier: 1.6,
     riderBaseFareSharePercent: 80,
     riderDistanceFareSharePercent: 80,
-    packageTypes: [
-      { value: "document", label: "Document / Paper", isActive: true },
-      { value: "food", label: "Food Items", isActive: true },
-      { value: "clothes", label: "Clothes / Fabric", isActive: true },
-      { value: "electronics", label: "Electronics", isActive: true },
-      { value: "other", label: "Other Packets", isActive: true },
-    ],
+    packageCategories: [],
     maxWeightKg: 1,
-    packageDescriptionPlaceholder: "E.g. keys, critical document papers...",
+    expressCharge: 0,
   });
-  const [newPackageTypeLabel, setNewPackageTypeLabel] = useState("");
+  const [newPackageCategoryLabel, setNewPackageCategoryLabel] = useState("");
+  const [newPackageCategorySegment, setNewPackageCategorySegment] = useState("personal");
   const [pricingSaving, setPricingSaving] = useState(false);
 
   // Reports state
@@ -297,7 +294,7 @@ const AdminParcelDashboard = () => {
     adminCommission: 0,
   });
 
-  const fetchData = useCallback(async (isSilent = false) => {
+  const fetchData = useCallback(async (isSilent = false, { refreshPricing = !isSilent } = {}) => {
     if (!isSilent) setLoading(true);
     try {
       // Fetch Parcels
@@ -318,34 +315,29 @@ const AdminParcelDashboard = () => {
         setCouriers(couriersRes.data.results || couriersRes.data.result || []);
       }
 
-      // Fetch Pricing
-      const pricingRes = await parcelApi.adminGetPricingConfig();
-      if (pricingRes.data && pricingRes.data.success) {
-        const cfg = pricingRes.data.result || {};
-        setPricing({
-          baseFare: cfg.baseFare || 0,
-          perKmCharge: cfg.perKmCharge || 0,
-          weightCharge: cfg.weightCharge || 0,
-          baseSearchRadiusKm: cfg.baseSearchRadiusKm ?? 5,
-          radiusMultiplier: cfg.radiusMultiplier ?? 1.6,
-          riderBaseFareSharePercent:
-            cfg.riderBaseFareSharePercent ?? cfg.riderSharePercent ?? 80,
-          riderDistanceFareSharePercent:
-            cfg.riderDistanceFareSharePercent ?? cfg.riderSharePercent ?? 80,
-          packageTypes: Array.isArray(cfg.packageTypes) && cfg.packageTypes.length
-            ? cfg.packageTypes
-            : [
-                { value: "document", label: "Document / Paper", isActive: true },
-                { value: "food", label: "Food Items", isActive: true },
-                { value: "clothes", label: "Clothes / Fabric", isActive: true },
-                { value: "electronics", label: "Electronics", isActive: true },
-                { value: "other", label: "Other Packets", isActive: true },
-              ],
-          maxWeightKg: cfg.maxWeightKg ?? 1,
-          packageDescriptionPlaceholder:
-            cfg.packageDescriptionPlaceholder ||
-            "E.g. keys, critical document papers...",
-        });
+      // Pricing form must NOT refresh on silent polls — that wipes in-progress edits
+      // (e.g. Express Extra Charge) every 15s before Save.
+      if (refreshPricing) {
+        const pricingRes = await parcelApi.adminGetPricingConfig();
+        if (pricingRes.data && pricingRes.data.success) {
+          const cfg = pricingRes.data.result || {};
+          setPricing({
+            baseFare: cfg.baseFare || 0,
+            perKmCharge: cfg.perKmCharge || 0,
+            weightCharge: cfg.weightCharge || 0,
+            baseSearchRadiusKm: cfg.baseSearchRadiusKm ?? 5,
+            radiusMultiplier: cfg.radiusMultiplier ?? 1.6,
+            riderBaseFareSharePercent:
+              cfg.riderBaseFareSharePercent ?? cfg.riderSharePercent ?? 80,
+            riderDistanceFareSharePercent:
+              cfg.riderDistanceFareSharePercent ?? cfg.riderSharePercent ?? 80,
+            packageCategories: Array.isArray(cfg.packageCategories)
+              ? cfg.packageCategories
+              : [],
+            maxWeightKg: cfg.maxWeightKg ?? 1,
+            expressCharge: cfg.expressCharge ?? 0,
+          });
+        }
       }
 
       // Fetch Reports
@@ -451,27 +443,47 @@ const AdminParcelDashboard = () => {
     e.preventDefault();
     setPricingSaving(true);
     try {
+      const expressChargeValue = Math.max(0, Number(pricing.expressCharge) || 0);
       const payload = {
-        baseFare: Number(pricing.baseFare),
-        perKmCharge: Number(pricing.perKmCharge),
-        weightCharge: Number(pricing.weightCharge),
-        baseSearchRadiusKm: Number(pricing.baseSearchRadiusKm),
-        radiusMultiplier: Number(pricing.radiusMultiplier),
-        riderBaseFareSharePercent: Number(pricing.riderBaseFareSharePercent),
-        riderDistanceFareSharePercent: Number(pricing.riderDistanceFareSharePercent),
-        packageTypes: pricing.packageTypes,
-        maxWeightKg: Number(pricing.maxWeightKg),
-        packageDescriptionPlaceholder: pricing.packageDescriptionPlaceholder,
+        baseFare: 0,
+        perKmCharge: Number(pricing.perKmCharge) || 0,
+        weightCharge: Number(pricing.weightCharge) || 0,
+        baseSearchRadiusKm: Number(pricing.baseSearchRadiusKm) || 5,
+        radiusMultiplier: Number(pricing.radiusMultiplier) || 1.6,
+        riderBaseFareSharePercent: Number(pricing.riderBaseFareSharePercent) || 0,
+        riderDistanceFareSharePercent: Number(pricing.riderDistanceFareSharePercent) || 0,
+        packageCategories: pricing.packageCategories,
+        maxWeightKg: Number(pricing.maxWeightKg) || 1,
+        expressCharge: expressChargeValue,
       };
       const res = await parcelApi.adminUpdatePricingConfig(payload);
       if (res.data && res.data.success) {
-        toast.success("Parcel settings updated successfully!");
-        fetchData();
+        const cfg = res.data.result || {};
+        setPricing((prev) => ({
+          ...prev,
+          baseFare: cfg.baseFare ?? 0,
+          perKmCharge: cfg.perKmCharge ?? prev.perKmCharge,
+          weightCharge: cfg.weightCharge ?? prev.weightCharge,
+          baseSearchRadiusKm: cfg.baseSearchRadiusKm ?? prev.baseSearchRadiusKm,
+          radiusMultiplier: cfg.radiusMultiplier ?? prev.radiusMultiplier,
+          riderBaseFareSharePercent:
+            cfg.riderBaseFareSharePercent ?? prev.riderBaseFareSharePercent,
+          riderDistanceFareSharePercent:
+            cfg.riderDistanceFareSharePercent ?? prev.riderDistanceFareSharePercent,
+          packageCategories: Array.isArray(cfg.packageCategories)
+            ? cfg.packageCategories
+            : prev.packageCategories,
+          maxWeightKg: cfg.maxWeightKg ?? prev.maxWeightKg,
+          expressCharge: cfg.expressCharge ?? expressChargeValue,
+        }));
+        toast.success(
+          `Parcel settings saved. Express extra charge: ₹${Number(cfg.expressCharge ?? expressChargeValue).toFixed(0)}`,
+        );
       } else {
-        toast.error(res.data.message || "Failed to update settings");
+        toast.error(res.data?.message || "Failed to update settings");
       }
     } catch (error) {
-      toast.error("Failed to save settings");
+      toast.error(error?.response?.data?.message || "Failed to save settings");
     } finally {
       setPricingSaving(false);
     }
@@ -520,11 +532,13 @@ const AdminParcelDashboard = () => {
   const closeCourierEditModal = () => {
     setCourierEditModalOpen(false);
     setEditingCourierId(null);
+    setEditingCourierIsOther(false);
     setEditCourierForm(emptyCourierForm);
   };
 
   const startEditCourier = (company) => {
     setEditingCourierId(company._id);
+    setEditingCourierIsOther(company.isOther === true);
     setEditCourierForm({
       name: company.name || "",
       platformCharge: String(company.platformCharge ?? 0),
@@ -550,10 +564,6 @@ const AdminParcelDashboard = () => {
     const name = String(addCourierForm.name || "").trim();
     if (!name) {
       return toast.error("Courier company name is required");
-    }
-    const locationError = validateCourierLocationForm(addCourierForm.location);
-    if (locationError) {
-      return toast.error(locationError);
     }
 
     setCourierSaving(true);
@@ -581,9 +591,11 @@ const AdminParcelDashboard = () => {
       return toast.error("Courier company name is required");
     }
     if (!editingCourierId) return;
-    const locationError = validateCourierLocationForm(editCourierForm.location);
-    if (locationError) {
-      return toast.error(locationError);
+    if (!editingCourierIsOther) {
+      const locationError = validateCourierLocationForm(editCourierForm.location);
+      if (locationError) {
+        return toast.error(locationError);
+      }
     }
 
     setCourierSaving(true);
@@ -772,6 +784,24 @@ const AdminParcelDashboard = () => {
                           <td className="p-4 align-top">
                             <span className="font-black text-slate-900 block">₹{parcel.fare}</span>
                             <span className="text-xs text-slate-400">{parcel.weight} KG</span>
+                            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full mt-1 inline-block ${
+                              parcel.deliverySpeed === 'express'
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {parcel.deliverySpeed === 'express' ? 'Express · 10 min' : 'Normal · 30 min'}
+                            </span>
+                            {String(parcel.paymentMethod).toUpperCase() === 'COD' && (
+                              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full mt-1 inline-block bg-orange-50 text-orange-700 block w-fit">
+                                COD · {parcel.codSettlement?.status === 'REMITTED_TO_ADMIN' || parcel.paymentStatus === 'PAID'
+                                  ? 'Admin paid'
+                                  : parcel.codSettlement?.status === 'WITH_SELLER'
+                                    ? 'With seller'
+                                    : parcel.codSettlement?.status === 'RIDER_HOLDING'
+                                      ? 'With rider'
+                                      : 'Collect pending'}
+                              </span>
+                            )}
                           </td>
                           <td className="p-4 align-top">
                             <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase block w-fit ${
@@ -919,25 +949,11 @@ const AdminParcelDashboard = () => {
                       <DollarSign className="text-primary" size={18} /> Customer Pricing
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
-                      Fare charged to customers for parcel bookings (up to {pricing.maxWeightKg || 1} KG).
+                      Fare = (pickup → nearest hub distance × per KM) + weight + courier platform fee + express (if selected). No base charge.
                     </p>
                   </div>
 
-                  <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Base Fare (₹)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        required
-                        value={pricing.baseFare}
-                        onChange={(e) => setPricing((p) => ({ ...p, baseFare: e.target.value }))}
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                      />
-                      <p className="text-[10px] text-slate-400 font-medium">Flat fee for every booking.</p>
-                    </div>
-
+                  <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-slate-500 uppercase">Per KM Charge (₹)</label>
                       <input
@@ -949,7 +965,9 @@ const AdminParcelDashboard = () => {
                         onChange={(e) => setPricing((p) => ({ ...p, perKmCharge: e.target.value }))}
                         className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
                       />
-                      <p className="text-[10px] text-slate-400 font-medium">Added per kilometer.</p>
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Charged for distance from customer pickup to nearest parcel hub seller.
+                      </p>
                     </div>
 
                     <div className="space-y-1">
@@ -964,6 +982,68 @@ const AdminParcelDashboard = () => {
                         className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
                       />
                       <p className="text-[10px] text-slate-400 font-medium">Multiplied by package weight.</p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Max Weight (KG)</label>
+                      <input
+                        type="number"
+                        min="0.1"
+                        max="50"
+                        step="0.1"
+                        required
+                        value={pricing.maxWeightKg}
+                        onChange={(e) =>
+                          setPricing((p) => ({ ...p, maxWeightKg: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Maximum parcel weight customers can book.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <Zap className="text-primary" size={18} /> Delivery Speed Options
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Customers choose Normal or Express when booking. Set the extra charge for Express.
+                    </p>
+                  </div>
+
+                  <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <p className="text-xs font-black text-slate-800">Normal</p>
+                      <p className="text-[11px] text-slate-500 mt-1">30 min · no extra charge</p>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <p className="text-xs font-black text-slate-800">Express</p>
+                      <p className="text-[11px] text-slate-500 mt-1">10 min · priority delivery</p>
+                    </div>
+
+                    <div className="space-y-1 sm:col-span-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Express Extra Charge (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={pricing.expressCharge}
+                        onChange={(e) =>
+                          setPricing((p) => ({ ...p, expressCharge: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Added to customer fare when Express is selected. If this is ₹0, Express and Normal will cost the same.
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -1018,140 +1098,136 @@ const AdminParcelDashboard = () => {
                 <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
                   <div className="p-5 border-b border-slate-100">
                     <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
-                      <Package className="text-primary" size={18} /> Package Details Options
+                      <Package className="text-primary" size={18} /> Package Categories
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
-                      Configure package types, max weight, and description placeholder shown to customers.
+                      Add categories under Personal or Business. Customers pick a segment first, then
+                      see only the categories for that segment.
                     </p>
                   </div>
 
                   <div className="p-5 space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-500 uppercase">Max Weight (KG)</label>
-                        <input
-                          type="number"
-                          min="0.1"
-                          max="50"
-                          step="0.1"
-                          required
-                          value={pricing.maxWeightKg}
-                          onChange={(e) =>
-                            setPricing((p) => ({ ...p, maxWeightKg: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                        />
-                      </div>
-                      <div className="space-y-1 sm:col-span-2">
-                        <label className="text-xs font-bold text-slate-500 uppercase">
-                          Description Placeholder
-                        </label>
-                        <input
-                          type="text"
-                          value={pricing.packageDescriptionPlaceholder}
-                          onChange={(e) =>
-                            setPricing((p) => ({
-                              ...p,
-                              packageDescriptionPlaceholder: e.target.value,
-                            }))
-                          }
-                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                        />
-                      </div>
-                    </div>
-
                     <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Package Types</label>
-                      <div className="space-y-2">
-                        {(pricing.packageTypes || []).map((type, idx) => (
-                          <div
-                            key={`${type.value}-${idx}`}
-                            className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"
+                      {(pricing.packageCategories || []).length === 0 && (
+                        <p className="text-xs text-slate-400">
+                          No categories yet. Add one below.
+                        </p>
+                      )}
+                      {(pricing.packageCategories || []).map((cat, idx) => (
+                        <div
+                          key={`${cat.value}-${idx}`}
+                          className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"
+                        >
+                          <input
+                            type="text"
+                            value={cat.label}
+                            onChange={(e) => {
+                              const label = e.target.value;
+                              setPricing((p) => {
+                                const next = [...(p.packageCategories || [])];
+                                next[idx] = {
+                                  ...next[idx],
+                                  label,
+                                  value:
+                                    next[idx].value ||
+                                    `${next[idx].segment || "personal"}_${label
+                                      .toLowerCase()
+                                      .replace(/[^a-z0-9]+/g, "_")
+                                      .replace(/^_+|_+$/g, "")}`,
+                                };
+                                return { ...p, packageCategories: next };
+                              });
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                            placeholder="Label (e.g. Gift)"
+                          />
+                          <select
+                            value={cat.segment === "business" ? "business" : "personal"}
+                            onChange={(e) => {
+                              const segment = e.target.value;
+                              setPricing((p) => {
+                                const next = [...(p.packageCategories || [])];
+                                next[idx] = { ...next[idx], segment };
+                                return { ...p, packageCategories: next };
+                              });
+                            }}
+                            className="w-full sm:w-40 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary bg-white"
                           >
+                            <option value="personal">Personal</option>
+                            <option value="business">Business</option>
+                          </select>
+                          <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-600 px-2">
                             <input
-                              type="text"
-                              value={type.label}
+                              type="checkbox"
+                              checked={cat.isActive !== false}
                               onChange={(e) => {
-                                const label = e.target.value;
                                 setPricing((p) => {
-                                  const next = [...(p.packageTypes || [])];
-                                  next[idx] = {
-                                    ...next[idx],
-                                    label,
-                                    value:
-                                      next[idx].value ||
-                                      label
-                                        .toLowerCase()
-                                        .replace(/[^a-z0-9]+/g, "_")
-                                        .replace(/^_+|_+$/g, ""),
-                                  };
-                                  return { ...p, packageTypes: next };
+                                  const next = [...(p.packageCategories || [])];
+                                  next[idx] = { ...next[idx], isActive: e.target.checked };
+                                  return { ...p, packageCategories: next };
                                 });
                               }}
-                              className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
-                              placeholder="Label (e.g. Document / Paper)"
                             />
-                            <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-600 px-2">
-                              <input
-                                type="checkbox"
-                                checked={type.isActive !== false}
-                                onChange={(e) => {
-                                  setPricing((p) => {
-                                    const next = [...(p.packageTypes || [])];
-                                    next[idx] = { ...next[idx], isActive: e.target.checked };
-                                    return { ...p, packageTypes: next };
-                                  });
-                                }}
-                              />
-                              Active
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPricing((p) => ({
-                                  ...p,
-                                  packageTypes: (p.packageTypes || []).filter((_, i) => i !== idx),
-                                }))
-                              }
-                              className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        ))}
-                      </div>
+                            Active
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPricing((p) => ({
+                                ...p,
+                                packageCategories: (p.packageCategories || []).filter(
+                                  (_, i) => i !== idx,
+                                ),
+                              }))
+                            }
+                            className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
 
-                      <div className="flex gap-2 pt-1">
-                        <input
-                          type="text"
-                          value={newPackageTypeLabel}
-                          onChange={(e) => setNewPackageTypeLabel(e.target.value)}
-                          placeholder="Add package type label"
-                          className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const label = newPackageTypeLabel.trim();
-                            if (!label) return;
-                            const value = label
-                              .toLowerCase()
-                              .replace(/[^a-z0-9]+/g, "_")
-                              .replace(/^_+|_+$/g, "");
-                            setPricing((p) => ({
-                              ...p,
-                              packageTypes: [
-                                ...(p.packageTypes || []),
-                                { value, label, isActive: true },
-                              ],
-                            }));
-                            setNewPackageTypeLabel("");
-                          }}
-                          className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold"
-                        >
-                          Add type
-                        </button>
-                      </div>
+                    <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                      <input
+                        type="text"
+                        value={newPackageCategoryLabel}
+                        onChange={(e) => setNewPackageCategoryLabel(e.target.value)}
+                        placeholder="Add category label"
+                        className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                      />
+                      <select
+                        value={newPackageCategorySegment}
+                        onChange={(e) => setNewPackageCategorySegment(e.target.value)}
+                        className="w-full sm:w-40 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary bg-white"
+                      >
+                        <option value="personal">Personal</option>
+                        <option value="business">Business</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const label = newPackageCategoryLabel.trim();
+                          if (!label) return;
+                          const segment =
+                            newPackageCategorySegment === "business" ? "business" : "personal";
+                          const value = `${segment}_${label
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, "_")
+                            .replace(/^_+|_+$/g, "")}`;
+                          setPricing((p) => ({
+                            ...p,
+                            packageCategories: [
+                              ...(p.packageCategories || []),
+                              { value, label, segment, isActive: true },
+                            ],
+                          }));
+                          setNewPackageCategoryLabel("");
+                        }}
+                        className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold"
+                      >
+                        Add category
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1162,32 +1238,12 @@ const AdminParcelDashboard = () => {
                       <Truck className="text-primary" size={18} /> Delivery Partner Payout
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
-                      Rider earns admin-set % of base fare and distance fare only. Weight charge stays with platform.
+                      Rider earns admin-set % of distance fare only. Weight, platform, and express charges stay with the platform.
                     </p>
                   </div>
 
                   <div className="p-5 space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-500 uppercase">
-                          Base Fare Share (%)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="1"
-                          required
-                          value={pricing.riderBaseFareSharePercent}
-                          onChange={(e) =>
-                            setPricing((p) => ({ ...p, riderBaseFareSharePercent: e.target.value }))
-                          }
-                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                        />
-                        <p className="text-[10px] text-slate-400 font-medium">
-                          % of base fare paid to rider.
-                        </p>
-                      </div>
                       <div className="space-y-1">
                         <label className="text-xs font-bold text-slate-500 uppercase">
                           Distance Fare Share (%)
@@ -1213,23 +1269,20 @@ const AdminParcelDashboard = () => {
                     <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 text-xs text-slate-600 font-medium space-y-1">
                       <p className="font-bold text-slate-800">Example payout</p>
                       <p>
-                        Base ₹{Number(pricing.baseFare) || 0} × {Number(pricing.riderBaseFareSharePercent) || 0}%
+                        Distance (e.g. 5 km × ₹{Number(pricing.perKmCharge) || 0} = ₹
+                        {(5 * (Number(pricing.perKmCharge) || 0)).toFixed(2)}) ×{" "}
+                        {Number(pricing.riderDistanceFareSharePercent) || 0}%
                         {" = "}
                         ₹{(
-                          ((Number(pricing.baseFare) || 0) *
-                            (Number(pricing.riderBaseFareSharePercent) || 0)) /
+                          (5 *
+                            (Number(pricing.perKmCharge) || 0) *
+                            (Number(pricing.riderDistanceFareSharePercent) || 0)) /
                           100
                         ).toFixed(2)}
                       </p>
-                      <p>
-                        Distance (e.g. ₹100) × {Number(pricing.riderDistanceFareSharePercent) || 0}%
-                        {" = "}
-                        ₹{(
-                          (100 * (Number(pricing.riderDistanceFareSharePercent) || 0)) /
-                          100
-                        ).toFixed(2)}
+                      <p className="text-slate-400">
+                        Weight, platform, and express charges are not shared with the rider.
                       </p>
-                      <p className="text-slate-400">Weight charge is not shared with the rider.</p>
                     </div>
                   </div>
                 </div>
@@ -1276,14 +1329,6 @@ const AdminParcelDashboard = () => {
                         className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
                       />
                     </div>
-
-                    <CourierLocationFields
-                      location={addCourierForm.location}
-                      onFieldChange={(field, value) =>
-                        updateCourierFormLocation(setAddCourierForm, field, value)
-                      }
-                      onOpenMap={() => setCourierMapPickerTarget("add")}
-                    />
 
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-slate-500 uppercase">
@@ -1385,7 +1430,9 @@ const AdminParcelDashboard = () => {
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-black text-slate-800">{company.name}</span>
+                            <span className="text-sm font-black text-slate-800">
+                              {company.isOther ? "Other (custom)" : company.name}
+                            </span>
                             <span
                               className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
                                 company.isActive
@@ -1395,6 +1442,11 @@ const AdminParcelDashboard = () => {
                             >
                               {company.isActive ? "Active" : "Inactive"}
                             </span>
+                            {company.isOther && (
+                              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                Customer types name
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-500 font-medium mt-1">
                             Platform:{" "}
@@ -1407,7 +1459,12 @@ const AdminParcelDashboard = () => {
                             </span>
                             {" · "}Sort: {company.sortOrder ?? 0}
                           </p>
-                          {company.location?.fullAddress ? (
+                          {company.isOther ? (
+                            <p className="text-[11px] text-slate-500 mt-1">
+                              Shown to customers as “Other”. They type their own courier
+                              company name; you only set the platform charge above.
+                            </p>
+                          ) : company.location?.fullAddress ? (
                             <p className="text-[11px] text-slate-500 mt-1 flex items-start gap-1">
                               <MapPin size={12} className="shrink-0 mt-0.5 text-primary" />
                               <span className="line-clamp-2">{company.location.fullAddress}</span>
@@ -1435,14 +1492,16 @@ const AdminParcelDashboard = () => {
                           >
                             <Pencil size={14} />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setCourierToDelete(company)}
-                            className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200"
-                            title="Delete"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {!company.isOther && (
+                            <button
+                              type="button"
+                              onClick={() => setCourierToDelete(company)}
+                              className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200"
+                              title="Delete"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))
@@ -1593,6 +1652,40 @@ const AdminParcelDashboard = () => {
                 </div>
 
                 <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Delivery Speed</span>
+                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase block w-fit mt-1.5 ${
+                    selectedParcel.deliverySpeed === 'express'
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {selectedParcel.deliverySpeed === 'express' ? 'Express · 10 min' : 'Normal · 30 min'}
+                  </span>
+                </div>
+
+                <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Payment</span>
+                  <span className="text-sm font-black text-slate-800 mt-1 block">
+                    {selectedParcel.paymentMethod || "—"} · {selectedParcel.paymentStatus || "—"}
+                  </span>
+                  {String(selectedParcel.paymentMethod).toUpperCase() === "COD" && (
+                    <div className="mt-2 text-[11px] text-slate-600 space-y-0.5 font-medium">
+                      <p>
+                        Collect: ₹
+                        {Number(
+                          selectedParcel.codSettlement?.collectAmount || selectedParcel.fare || 0,
+                        ).toFixed(2)}
+                      </p>
+                      <p>
+                        COD status:{" "}
+                        <span className="font-bold text-slate-800">
+                          {selectedParcel.codSettlement?.status || "—"}
+                        </span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-100">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Fare & Weight</span>
                   <span className="text-sm font-black text-slate-800 mt-1 block">₹{selectedParcel.fare} ({selectedParcel.weight} KG)</span>
                 </div>
@@ -1733,10 +1826,12 @@ const AdminParcelDashboard = () => {
                 <div>
                   <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
                     <Pencil className="text-primary" size={18} />
-                    Edit Courier Company
+                    {editingCourierIsOther ? 'Edit “Other” Option' : 'Edit Courier Company'}
                   </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Update name, charges, office address, and visibility.
+                    {editingCourierIsOther
+                      ? 'Set the platform charge for the customer-typed courier option.'
+                      : 'Update name, charges, office address, and visibility.'}
                   </p>
                 </div>
                 <button
@@ -1754,25 +1849,37 @@ const AdminParcelDashboard = () => {
                   className="p-5 space-y-4 overflow-y-auto overscroll-contain flex-1 min-h-0 modal-scroll-pad"
                   style={{ WebkitOverflowScrolling: "touch", overscrollBehavior: "contain" }}
                 >
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Company Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={editCourierForm.name}
-                    onChange={(e) => setEditCourierForm((f) => ({ ...f, name: e.target.value }))}
-                    placeholder="e.g. Blue Dart"
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                  />
-                </div>
+                {editingCourierIsOther ? (
+                  <div className="rounded-xl bg-primary/5 border border-primary/20 px-3 py-2.5">
+                    <p className="text-xs font-bold text-slate-700">“Other” courier option</p>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Customers who pick this option type their own courier company
+                      name. You only control the platform charge below.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Company Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={editCourierForm.name}
+                        onChange={(e) => setEditCourierForm((f) => ({ ...f, name: e.target.value }))}
+                        placeholder="e.g. Blue Dart"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
 
-                <CourierLocationFields
-                  location={editCourierForm.location}
-                  onFieldChange={(field, value) =>
-                    updateCourierFormLocation(setEditCourierForm, field, value)
-                  }
-                  onOpenMap={() => setCourierMapPickerTarget("edit")}
-                />
+                    <CourierLocationFields
+                      location={editCourierForm.location}
+                      onFieldChange={(field, value) =>
+                        updateCourierFormLocation(setEditCourierForm, field, value)
+                      }
+                      onOpenMap={() => setCourierMapPickerTarget("edit")}
+                    />
+                  </>
+                )}
 
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase">
@@ -1794,38 +1901,42 @@ const AdminParcelDashboard = () => {
                   </p>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Courier Company Charge (₹)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    required
-                    value={editCourierForm.companyCharge}
-                    onChange={(e) =>
-                      setEditCourierForm((f) => ({ ...f, companyCharge: e.target.value }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                  />
-                  <p className="text-[10px] text-slate-400 font-medium">
-                    How much this courier company itself charges.
-                  </p>
-                </div>
+                {!editingCourierIsOther && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Courier Company Charge (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={editCourierForm.companyCharge}
+                        onChange={(e) =>
+                          setEditCourierForm((f) => ({ ...f, companyCharge: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        How much this courier company itself charges.
+                      </p>
+                    </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Sort Order</label>
-                  <input
-                    type="number"
-                    step="1"
-                    value={editCourierForm.sortOrder}
-                    onChange={(e) =>
-                      setEditCourierForm((f) => ({ ...f, sortOrder: e.target.value }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
-                  />
-                </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Sort Order</label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={editCourierForm.sortOrder}
+                        onChange={(e) =>
+                          setEditCourierForm((f) => ({ ...f, sortOrder: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
+                  </>
+                )}
 
                 <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer">
                   <input

@@ -19,6 +19,13 @@ export const sellerApi = {
     // Others
     getStats: (range) => axiosInstance.get('/seller/stats', { params: { range } }),
     getOrders: (params) => axiosInstance.get('/orders/seller-orders', { params }),
+    getParcels: () => axiosInstance.get('/parcel/seller/parcels'),
+    confirmParcelCodReceived: (parcelId) =>
+      axiosInstance.post('/parcel/seller/cod/confirm', { parcelId }),
+    createParcelCodRemit: (parcelId) =>
+      axiosInstance.post('/parcel/seller/cod/remit/create', { parcelId }),
+    verifyParcelCodRemit: (data) =>
+      axiosInstance.post('/parcel/seller/cod/remit/verify', data),
     updateOrderStatus: (orderId, data) => axiosInstance.put(`/orders/status/${orderId}`, data),
     getEarnings: () => axiosInstance.get('/seller/earnings'),
     getWalletSummary: () => axiosInstance.get('/seller/wallet/summary'),

@@ -59,7 +59,26 @@ export function parseCourierLocation(body = {}) {
   return location;
 }
 
+export function isCourierLocationEmpty(location = {}) {
+  return (
+    !String(location.flatNo || "").trim() &&
+    !String(location.address || "").trim() &&
+    !String(location.landmark || "").trim() &&
+    !String(location.city || "").trim() &&
+    !String(location.state || "").trim() &&
+    !String(location.pincode || "").trim() &&
+    !String(location.phone || "").trim() &&
+    !Number.isFinite(location.lat) &&
+    !Number.isFinite(location.lng)
+  );
+}
+
 export function validateCourierLocation(location) {
+  // Office location is optional. Only validate when the admin actually
+  // provides some address details (e.g. the "Other" option leaves it blank).
+  if (isCourierLocationEmpty(location)) {
+    return null;
+  }
   if (!location.address) {
     return "Street / building address is required";
   }

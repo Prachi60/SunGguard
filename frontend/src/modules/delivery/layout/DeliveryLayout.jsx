@@ -63,10 +63,25 @@ const DeliveryLayout = () => {
   const activeParcelRef = useRef(null);
   const activeParcelOfferRef = useRef(null);
   const riderOnJobRef = useRef(Boolean(user?.isBusy));
+  const userBusyRef = useRef(Boolean(user?.isBusy));
+  const canReceiveParcelBroadcastRef = useRef(canReceiveParcelBroadcast);
+  const suppressIncomingModalRef = useRef(false);
+  const availableOrdersRequestRef = useRef({ inFlight: false, controller: null });
+  const availablePollLastAtRef = useRef(0);
+  const notificationsRequestRef = useRef({ inFlight: false, controller: null });
+  const locationRequestRef = useRef({ inFlight: false, controller: null });
+  const orderRingtoneRef = useRef(null);
+  const ringtoneRetryTimerRef = useRef(null);
+  const ringtoneUnlockHandlerRef = useRef(null);
 
   useEffect(() => {
     riderOnJobRef.current = Boolean(user?.isBusy);
+    userBusyRef.current = Boolean(user?.isBusy);
   }, [user?.isBusy]);
+
+  useEffect(() => {
+    canReceiveParcelBroadcastRef.current = canReceiveParcelBroadcast;
+  }, [canReceiveParcelBroadcast]);
 
   useEffect(() => {
     activeParcelRef.current = activeParcel;
@@ -75,16 +90,10 @@ const DeliveryLayout = () => {
   useEffect(() => {
     activeParcelOfferRef.current = activeParcelOffer;
   }, [activeParcelOffer]);
-  const [isFirstLoad, setIsFirstLoad] = useState(true);
+
   const [availableOrdersCount, setAvailableOrdersCount] = useState(0);
   const [isAcceptingOrder, setIsAcceptingOrder] = useState(false);
   const acceptInFlightRef = useRef(false);
-  const availableOrdersRequestRef = useRef({ inFlight: false, controller: null });
-  const notificationsRequestRef = useRef({ inFlight: false, controller: null });
-  const locationRequestRef = useRef({ inFlight: false, controller: null });
-  const orderRingtoneRef = useRef(null);
-  const ringtoneRetryTimerRef = useRef(null);
-  const ringtoneUnlockHandlerRef = useRef(null);
 
   const getOrderRingtone = () => {
     if (!orderRingtoneRef.current) {
@@ -163,20 +172,33 @@ const DeliveryLayout = () => {
   /** While working an active order, do not stack the global incoming-offer modal. */
   const suppressIncomingModal = useMemo(
     () =>
-      /\/delivery\/(confirm-delivery|navigation|order-details)/.test(location.pathname),
+      /\/delivery\/(confirm-delivery|navigation|order-details|parcel-task)/.test(location.pathname),
     [location.pathname],
   );
+
+  useEffect(() => {
+    suppressIncomingModalRef.current = suppressIncomingModal;
+  }, [suppressIncomingModal]);
 
   const shouldBlockIncomingOffers = useCallback(() => {
     return (
       riderOnJobRef.current ||
-      Boolean(user?.isBusy) ||
+      userBusyRef.current ||
       Boolean(activeOrderRef.current) ||
       Boolean(activeParcelRef.current) ||
       Boolean(activeParcelOfferRef.current) ||
-      suppressIncomingModal
+      suppressIncomingModalRef.current
     );
-  }, [user?.isBusy, suppressIncomingModal]);
+  }, []);
+
+  /** Parcel offers: allow multiple jobs; only block during quick-commerce order or open offer modal. */
+  const shouldBlockParcelOffers = useCallback(() => {
+    return (
+      Boolean(activeOrderRef.current) ||
+      Boolean(activeParcelOfferRef.current) ||
+      suppressIncomingModalRef.current
+    );
+  }, []);
 
   useEffect(() => {
     if (!canReceiveOrders) return undefined;
@@ -195,7 +217,7 @@ const DeliveryLayout = () => {
 
   const applyFromBroadcastPayload = useCallback((payload) => {
     if (!payload?.orderId) return false;
-    if (riderOnJobRef.current || user?.isBusy || activeOrderRef.current) return true;
+    if (riderOnJobRef.current || userBusyRef.current || activeOrderRef.current) return true;
     if (shownOrderIdsRef.current.has(payload.orderId)) return true;
     const p = payload.preview;
     if (
@@ -228,15 +250,12 @@ const DeliveryLayout = () => {
       items: payload.items || [],
     });
     return true;
-  }, [user?.isBusy]);
+  }, []);
 
   const applyFromParcelBroadcastPayload = useCallback((payload) => {
     if (!payload?.parcelId) return false;
     if (
-      riderOnJobRef.current ||
-      user?.isBusy ||
       activeOrderRef.current ||
-      activeParcelRef.current ||
       activeParcelOfferRef.current
     ) {
       return true;
@@ -268,18 +287,18 @@ const DeliveryLayout = () => {
       riderSharePercent: Number(p.riderSharePercent) || Math.round(share * 100),
       weight: p.weight,
       distance: p.distance,
+      deliverySpeed: p.deliverySpeed === "express" ? "express" : "normal",
+      paymentMethod: String(p.paymentMethod || "").toUpperCase() || "COD",
+      collectAmount: Number(p.collectAmount) || 0,
       expiresAt: payload.searchExpiresAt || null,
       isBroadcast: true,
     });
     return true;
-  }, [user?.isBusy]);
+  }, []);
 
   const applyAvailableParcelsList = useCallback((availableParcels) => {
     if (
-      riderOnJobRef.current ||
-      user?.isBusy ||
       activeOrderRef.current ||
-      activeParcelRef.current ||
       activeParcelOfferRef.current
     ) {
       return;
@@ -314,14 +333,20 @@ const DeliveryLayout = () => {
       riderSharePercent: sharePercent,
       weight: nextParcel.weight,
       distance: nextParcel.distance,
+      deliverySpeed: nextParcel.deliverySpeed === "express" ? "express" : "normal",
+      paymentMethod: String(nextParcel.paymentMethod || "").toUpperCase() || "COD",
+      collectAmount:
+        String(nextParcel.paymentMethod || "").toUpperCase() === "COD"
+          ? Number(nextParcel.codSettlement?.collectAmount || nextParcel.fare) || 0
+          : 0,
       expiresAt: nextParcel.searchExpiresAt || null,
       isBroadcast: true,
     });
-  }, [user?.isBusy]);
+  }, []);
 
   const applyAvailableOrdersList = useCallback((availableOrders) => {
     setAvailableOrdersCount(availableOrders.length);
-    if (riderOnJobRef.current || user?.isBusy || activeOrderRef.current) return;
+    if (riderOnJobRef.current || userBusyRef.current || activeOrderRef.current) return;
     const newOrder = availableOrders.find((o) => {
       if (shownOrderIdsRef.current.has(o.orderId)) return false;
       if (
@@ -354,7 +379,7 @@ const DeliveryLayout = () => {
       isReturnPickup,
       items: newOrder.items || [],
     });
-  }, [user?.isBusy]);
+  }, []);
 
   useEffect(() => {
     if (activeOrder || activeParcel || activeParcelOffer) {
@@ -483,13 +508,13 @@ const DeliveryLayout = () => {
   // Socket (`onDeliveryBroadcast`) remains the primary delivery channel.
   // This effect adds a low-frequency fallback so a rider who came online
   // *after* the broadcast left the wire, or whose socket dropped without
-  // reconnecting, will still see new jobs within ~15s.
+  // reconnecting, will still see new jobs within ~30s.
   //
   // Guards: only ticks while the rider is online, the foreground tab is
   // visible, no active-order modal is up, and the route isn't already in
-  // an active delivery flow (confirm-delivery / navigation). On error we
-  // back off exponentially up to 60s so a flaky network doesn't hammer
-  // the API.
+  // an active delivery flow (confirm-delivery / navigation / parcel-task).
+  // Effect deps are intentionally minimal — blockers live in refs so
+  // user/busy/path changes do not restart the timer and re-hit the API.
   useEffect(() => {
     if (!canReceiveOrders) {
       if (availableOrdersRequestRef.current.controller) {
@@ -502,12 +527,12 @@ const DeliveryLayout = () => {
     let timer = null;
     let consecutiveErrors = 0;
 
-    const BASE_DELAY_MS = 15000;
-    const MAX_DELAY_MS = 60000;
+    const BASE_DELAY_MS = 30000;
+    const MAX_DELAY_MS = 90000;
+    const MIN_GAP_MS = 20000;
 
-    const tick = async () => {
+    const tick = async ({ force = false } = {}) => {
       if (cancelled) return;
-      if (shouldBlockIncomingOffers()) return;
       if (
         typeof document !== "undefined" &&
         document.visibilityState === "hidden"
@@ -515,20 +540,24 @@ const DeliveryLayout = () => {
         return;
       }
 
+      const now = Date.now();
+      if (!force && now - availablePollLastAtRef.current < MIN_GAP_MS) {
+        return;
+      }
+      availablePollLastAtRef.current = now;
+
       try {
-        const res = await fetchAvailableOrders();
-        if (cancelled || !res) return;
-        if (res.data?.success) {
-          const availableOrders = res.data.results || res.data.result || [];
-          applyAvailableOrdersList(availableOrders);
+        if (!shouldBlockIncomingOffers()) {
+          const res = await fetchAvailableOrders();
+          if (cancelled || !res) return;
+          if (res.data?.success) {
+            const availableOrders = res.data.results || res.data.result || [];
+            applyAvailableOrdersList(availableOrders);
+          }
         }
 
-        if (
-          canReceiveParcelBroadcast &&
-          !activeParcelOfferRef.current &&
-          !activeParcelRef.current
-        ) {
-          const parcelRes = await parcelApi.riderGetAvailable();
+        if (canReceiveParcelBroadcastRef.current && !shouldBlockParcelOffers()) {
+          const parcelRes = await parcelApi.riderGetAvailable({ ttl: 20000 });
           if (!cancelled && parcelRes?.data?.success) {
             const parcelList = parcelRes.data.results || parcelRes.data.result || [];
             applyAvailableParcelsList(parcelList);
@@ -546,8 +575,6 @@ const DeliveryLayout = () => {
         }
         consecutiveErrors += 1;
         console.error("Delivery Polling Error:", error);
-      } finally {
-        if (isFirstLoad) setIsFirstLoad(false);
       }
     };
 
@@ -565,11 +592,11 @@ const DeliveryLayout = () => {
     };
 
     // Kick off immediately, then schedule the recurring tick.
-    tick();
+    tick({ force: true });
     schedule();
 
-    // Wake-up: if the rider tabs back / focuses the window, fetch right
-    // away instead of waiting for the next interval tick.
+    // Wake-up: if the rider tabs back / focuses the window, fetch once
+    // (still respects MIN_GAP so rapid focus spam does not hammer APIs).
     const wakeUp = () => {
       if (cancelled) return;
       if (
@@ -601,8 +628,8 @@ const DeliveryLayout = () => {
     applyAvailableOrdersList,
     applyAvailableParcelsList,
     shouldBlockIncomingOffers,
+    shouldBlockParcelOffers,
     fetchAvailableOrders,
-    canReceiveParcelBroadcast,
   ]);
 
   // Background location heartbeat while the rider is online.
@@ -723,7 +750,7 @@ const DeliveryLayout = () => {
     if (!canReceiveParcelBroadcast) return undefined;
     const getToken = getDeliveryToken;
     return onParcelBroadcast(getToken, (payload) => {
-      if (shouldBlockIncomingOffers()) return;
+      if (shouldBlockParcelOffers()) return;
       const opened = applyFromParcelBroadcastPayload(payload);
       if (opened) return;
       parcelApi
@@ -739,7 +766,7 @@ const DeliveryLayout = () => {
     canReceiveParcelBroadcast,
     applyFromParcelBroadcastPayload,
     applyAvailableParcelsList,
-    shouldBlockIncomingOffers,
+    shouldBlockParcelOffers,
   ]);
 
   useEffect(() => {
@@ -776,14 +803,14 @@ const DeliveryLayout = () => {
     return onParcelAssigned(getToken, (parcel) => {
       const parcelId = parcel._id?.toString?.() || String(parcel._id);
       if (shownParcelIdsRef.current.has(parcelId)) return;
-      if (shouldBlockIncomingOffers()) return;
+      if (activeOrderRef.current) return;
       setActiveParcel(null);
       setActiveParcelOffer(null);
       stopOrderRingtone();
       toast.success("Parcel assigned. Continue with pickup workflow.");
       navigate(`/delivery/parcel-task/${parcelId}`);
     });
-  }, [canReceiveParcelBroadcast, shouldBlockIncomingOffers, navigate]);
+  }, [canReceiveParcelBroadcast, navigate]);
 
   // Notifications safety-net polling.
   //
@@ -808,7 +835,6 @@ const DeliveryLayout = () => {
 
     const tick = async () => {
       if (cancelled) return;
-      if (shouldBlockIncomingOffers()) return;
       if (
         typeof document !== "undefined" &&
         document.visibilityState === "hidden"
@@ -821,9 +847,9 @@ const DeliveryLayout = () => {
         if (cancelled || !res?.data?.success) return;
         const result = res.data.result || res.data.data;
         const notifications = result?.notifications || [];
-        if (shouldBlockIncomingOffers()) return;
         for (const n of notifications) {
           if (n.type === "parcel" && !n.isRead && n.data?.parcelId) {
+            if (shouldBlockParcelOffers()) continue;
             const parcelId = n.data.parcelId;
             if (shownParcelIdsRef.current.has(parcelId)) continue;
             const fromParcel = applyFromParcelBroadcastPayload({
@@ -837,6 +863,7 @@ const DeliveryLayout = () => {
           const isIncomingOrderType =
             n.type === "order" || n.type === "RETURN_PICKUP_ASSIGNED";
           if (!isIncomingOrderType || n.isRead || !n.data?.orderId) continue;
+          if (shouldBlockIncomingOffers()) continue;
           const oid = n.data.orderId;
           if (shownOrderIdsRef.current.has(oid)) continue;
           const fromStored = applyFromBroadcastPayload({
@@ -851,13 +878,6 @@ const DeliveryLayout = () => {
           const list = r2.data.results || r2.data.result || [];
           applyAvailableOrdersList(list);
           return;
-        }
-
-        if (canReceiveParcelBroadcast && !activeParcelOfferRef.current && !activeParcelRef.current) {
-          const parcelRes = await parcelApi.riderGetAvailable();
-          if (cancelled || !parcelRes?.data?.success) return;
-          const parcelList = parcelRes.data.results || parcelRes.data.result || [];
-          applyAvailableParcelsList(parcelList);
         }
 
         consecutiveErrors = 0;
@@ -920,12 +940,11 @@ const DeliveryLayout = () => {
     canReceiveOrders,
     applyFromBroadcastPayload,
     applyFromParcelBroadcastPayload,
-    applyAvailableParcelsList,
     applyAvailableOrdersList,
     shouldBlockIncomingOffers,
+    shouldBlockParcelOffers,
     fetchNotifications,
     fetchAvailableOrders,
-    canReceiveParcelBroadcast,
   ]);
 
   const skipOrder = useCallback(async () => {
@@ -942,12 +961,17 @@ const DeliveryLayout = () => {
       markIncomingOrderHandled(current.id);
       stopOrderRingtone();
       setActiveOrder(null);
+      riderOnJobRef.current = false;
+      userBusyRef.current = false;
+      await refreshUser().catch(() => {});
       toast.info("Order skipped");
     } catch (error) {
       console.error("Delivery Alert - Skip failed:", error);
       setActiveOrder(null);
+      riderOnJobRef.current = false;
+      await refreshUser().catch(() => {});
     }
-  }, []);
+  }, [refreshUser]);
 
   // Countdown from server deadline (same idea as seller panel)
   useEffect(() => {
@@ -984,12 +1008,14 @@ const DeliveryLayout = () => {
       shownParcelIdsRef.current = new Set(shownParcelIdsRef.current).add(current.parcelId);
       stopOrderRingtone();
       setActiveParcelOffer(null);
+      await refreshUser().catch(() => {});
       toast.info("Parcel offer skipped");
     } catch (error) {
       console.error("Parcel offer skip failed:", error);
       setActiveParcelOffer(null);
+      await refreshUser().catch(() => {});
     }
-  }, []);
+  }, [refreshUser]);
 
   useEffect(() => {
     if (!activeParcelOffer) return undefined;
@@ -1265,6 +1291,15 @@ const DeliveryLayout = () => {
                     >
                       New parcel request
                     </h2>
+                    {activeParcelOffer.deliverySpeed === "express" ? (
+                      <span className="mb-3 inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-800">
+                        Express · 10 min
+                      </span>
+                    ) : (
+                      <span className="mb-3 inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+                        Normal · 30 min
+                      </span>
+                    )}
                     <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-4">
                       First to accept gets the delivery
                     </p>
@@ -1277,6 +1312,21 @@ const DeliveryLayout = () => {
                         You&apos;ll get
                       </span>
                     </div>
+
+                    {String(activeParcelOffer.paymentMethod).toUpperCase() === "COD" &&
+                      Number(activeParcelOffer.collectAmount) > 0 && (
+                        <div className="w-full mb-4 rounded-2xl border-2 border-amber-200 bg-amber-50 px-4 py-3 text-center">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-amber-700">
+                            Collect from customer (COD)
+                          </p>
+                          <p className="text-2xl font-black text-amber-900 mt-0.5">
+                            ₹{Number(activeParcelOffer.collectAmount).toFixed(2)}
+                          </p>
+                          <p className="text-[10px] font-semibold text-amber-700/80 mt-1">
+                            Hand this full cash to the seller hub
+                          </p>
+                        </div>
+                      )}
 
                     <div className="w-full bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-3 mb-6 text-left text-xs">
                       <div>
@@ -1359,10 +1409,35 @@ const DeliveryLayout = () => {
                     >
                       New Parcel Assigned!
                     </h2>
+                    {activeParcel.deliverySpeed === "express" ? (
+                      <span className="mb-2 inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-800">
+                        Express · 10 min
+                      </span>
+                    ) : (
+                      <span className="mb-2 inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+                        Normal · 30 min
+                      </span>
+                    )}
                     
                     <p className="text-xs text-slate-500 font-bold mb-4">
                       ID: #{activeParcel._id.slice(-6)}
                     </p>
+
+                    {String(activeParcel.paymentMethod).toUpperCase() === "COD" && (
+                      <div className="w-full mb-4 rounded-2xl border-2 border-amber-200 bg-amber-50 px-4 py-3 text-center">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-amber-700">
+                          Collect from customer (COD)
+                        </p>
+                        <p className="text-2xl font-black text-amber-900 mt-0.5">
+                          ₹{Number(
+                            activeParcel.codSettlement?.collectAmount || activeParcel.fare || 0,
+                          ).toFixed(2)}
+                        </p>
+                        <p className="text-[10px] font-semibold text-amber-700/80 mt-1">
+                          Give full cash to seller after delivery
+                        </p>
+                      </div>
+                    )}
 
                     <div className="w-full bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-3 mb-6 text-left text-xs">
                       <div>
@@ -1401,27 +1476,7 @@ const DeliveryLayout = () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 w-full">
-                      <button
-                        type="button"
-                        disabled={isAcceptingOrder}
-                        className="py-4 rounded-2xl bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-wider hover:bg-slate-200/80 disabled:opacity-50 disabled:pointer-events-none"
-                        onClick={async () => {
-                          try {
-                            setIsAcceptingOrder(true);
-                            await parcelApi.riderUpdateStatus({ parcelId: activeParcel._id, status: "CANCELLED" });
-                            toast.error("Parcel task declined");
-                          } catch (err) {
-                            console.error(err);
-                          } finally {
-                            setIsAcceptingOrder(false);
-                            setActiveParcel(null);
-                            stopOrderRingtone();
-                          }
-                        }}
-                      >
-                        Decline
-                      </button>
+                    <div className="grid grid-cols-1 gap-3 w-full">
                       <button
                         type="button"
                         disabled={isAcceptingOrder}
@@ -1435,7 +1490,9 @@ const DeliveryLayout = () => {
                               navigate(`/delivery/parcel-task/${activeParcel._id}`);
                             }
                           } catch (err) {
-                            toast.error(err.response?.data?.message || "Failed to accept parcel task");
+                            // Already assigned: open task directly (cancel after accept is not allowed).
+                            toast.success("Opening assigned parcel task");
+                            navigate(`/delivery/parcel-task/${activeParcel._id}`);
                           } finally {
                             setIsAcceptingOrder(false);
                             setActiveParcel(null);
@@ -1443,7 +1500,7 @@ const DeliveryLayout = () => {
                           }
                         }}
                       >
-                        Accept Task
+                        Continue Task
                       </button>
                     </div>
                   </div>

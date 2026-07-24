@@ -18,8 +18,10 @@ import mongoose from "mongoose";
 import Order from "../../models/order.js";
 import Transaction from "../../models/transaction.js";
 import Wallet from "../../models/wallet.js";
+import Parcel from "../../models/parcel.js";
 import { roundCurrency } from "../../utils/money.js";
-import { buildKey, getOrSet, getTTL } from "../cacheService.js";
+import { buildKey, getOrSet, getTTL, invalidate } from "../cacheService.js";
+import { backfillMissingParcelEarnings } from "../parcelRiderSettlementService.js";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -46,6 +48,20 @@ function toDeliveryBoyId(rawId) {
 export async function getDeliveryStats(rawId) {
   const deliveryBoyId = toDeliveryBoyId(rawId);
   const cacheKey = buildKey("delivery", "stats", String(deliveryBoyId));
+
+  // Backfill before cache so past parcel deliveries show up immediately.
+  try {
+    const created = await backfillMissingParcelEarnings(deliveryBoyId);
+    if (created > 0) {
+      await Promise.all([
+        invalidate(cacheKey),
+        invalidate(buildKey("delivery", "earnings", String(deliveryBoyId))),
+      ]);
+    }
+  } catch {
+    /* non-blocking */
+  }
+
   return getOrSet(
     cacheKey,
     () => computeDeliveryStats(deliveryBoyId),
@@ -54,13 +70,21 @@ export async function getDeliveryStats(rawId) {
 }
 
 async function computeDeliveryStats(deliveryBoyId) {
-  const orders = await Order.find({
-    deliveryBoy: deliveryBoyId,
-    status: "delivered",
-  })
-    .select("_id")
-    .lean();
-  const totalDeliveries = orders.length;
+  const [orders, parcelDeliveries] = await Promise.all([
+    Order.find({
+      deliveryBoy: deliveryBoyId,
+      status: "delivered",
+    })
+      .select("_id")
+      .lean(),
+    Parcel.find({
+      deliveryPartnerId: deliveryBoyId,
+      status: "DELIVERED",
+    })
+      .select("_id")
+      .lean(),
+  ]);
+  const totalDeliveries = orders.length + parcelDeliveries.length;
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -112,6 +136,20 @@ async function computeDeliveryStats(deliveryBoyId) {
 export async function getDeliveryEarnings(rawId) {
   const deliveryBoyId = toDeliveryBoyId(rawId);
   const cacheKey = buildKey("delivery", "earnings", String(deliveryBoyId));
+
+  // Backfill before cache so past parcel deliveries show up immediately.
+  try {
+    const created = await backfillMissingParcelEarnings(deliveryBoyId);
+    if (created > 0) {
+      await Promise.all([
+        invalidate(cacheKey),
+        invalidate(buildKey("delivery", "stats", String(deliveryBoyId))),
+      ]);
+    }
+  } catch {
+    /* non-blocking */
+  }
+
   return getOrSet(
     cacheKey,
     () => computeDeliveryEarnings(deliveryBoyId),
@@ -172,6 +210,22 @@ async function computeDeliveryEarnings(deliveryBoyId) {
     )
     .reduce((acc, t) => acc + t.amount, 0);
 
+  const withdrawnTotal = transactions
+    .filter((t) => t.type === "Withdrawal" && t.status === "Settled")
+    .reduce((acc, t) => acc + Math.abs(Number(t.amount) || 0), 0);
+
+  const pendingWithdrawals = transactions
+    .filter(
+      (t) =>
+        t.type === "Withdrawal" &&
+        (t.status === "Pending" || t.status === "Processing"),
+    )
+    .reduce((acc, t) => acc + Math.abs(Number(t.amount) || 0), 0);
+
+  const availableBalance = roundCurrency(
+    Math.max(0, totalEarnings - withdrawnTotal - pendingWithdrawals),
+  );
+
   const cashCollected = roundCurrency(wallet?.cashInHand || 0);
 
   const sevenDaysAgo = new Date();
@@ -211,6 +265,9 @@ async function computeDeliveryEarnings(deliveryBoyId) {
 
   return {
     totalEarnings,
+    availableBalance,
+    withdrawnTotal,
+    pendingWithdrawals,
     onlinePay,
     incentives,
     tipsReceived,

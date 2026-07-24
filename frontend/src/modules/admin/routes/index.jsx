@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, Outlet } from "react-router-dom";
 import DashboardLayout from "@shared/layout/DashboardLayout";
+import NotFoundPage from "@shared/components/NotFoundPage";
 import { useSupportUnread } from "@core/context/SupportUnreadContext";
 import { setActiveRole, ROLES } from "@core/auth/activeRoleStore";
 import {
@@ -237,8 +238,14 @@ const AdminRoutes = () => {
   }, [totalUnread]);
 
   return (
-    <DashboardLayout navItems={navItemsWithBadges} title="Admin Center">
-      <Routes>
+    <Routes>
+      <Route
+        element={
+          <DashboardLayout navItems={navItemsWithBadges} title="Admin Center">
+            <Outlet />
+          </DashboardLayout>
+        }
+      >
         <Route path="/" element={<Dashboard />} />
         <Route path="/users" element={<UserManagement />} />
         <Route path="/profile" element={<AdminProfile />} />
@@ -283,12 +290,12 @@ const AdminRoutes = () => {
         <Route path="/orders/:status" element={<OrdersList />} />
         <Route path="/orders/view/:orderId" element={<OrderDetail />} />
         <Route path="/returns" element={<Returns />} />
-         <Route path="/billing" element={<BillingCharges />} />
+        <Route path="/billing" element={<BillingCharges />} />
         <Route path="/settings" element={<AdminSettings />} />
         <Route path="/env" element={<EnvSettings />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </DashboardLayout>
+      </Route>
+      <Route path="*" element={<NotFoundPage homePath="/admin" />} />
+    </Routes>
   );
 };
 

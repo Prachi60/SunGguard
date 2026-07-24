@@ -66,6 +66,32 @@ const OrderDetail = () => {
         }
     };
 
+    const handleApproveCancelRefund = async () => {
+        try {
+            await adminApi.approveCancelRefund(orderId);
+            showToast("Cancel approved. Amount credited to customer wallet.", "success");
+            fetchDetail();
+        } catch (error) {
+            showToast(
+                error?.response?.data?.message || "Failed to approve cancel refund",
+                "error",
+            );
+        }
+    };
+
+    const handleRejectCancelRequest = async () => {
+        try {
+            await adminApi.rejectCancelRequest(orderId);
+            showToast("Cancel request rejected. Order continues.", "success");
+            fetchDetail();
+        } catch (error) {
+            showToast(
+                error?.response?.data?.message || "Failed to reject cancel request",
+                "error",
+            );
+        }
+    };
+
     useEffect(() => {
         if (orderId) {
             fetchDetail();
@@ -220,6 +246,38 @@ const OrderDetail = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Left Column */}
                 <div className="lg:col-span-2 space-y-6">
+                    {order.cancelRequestStatus === "requested" && (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                                <p className="text-xs font-black uppercase tracking-widest text-amber-800">
+                                    Cancel refund pending
+                                </p>
+                                <p className="text-sm text-amber-900 mt-1">
+                                    Customer requested cancel after online payment.
+                                    Approve to cancel the order and credit the amount to their wallet.
+                                </p>
+                                {order.cancelReason ? (
+                                    <p className="text-xs text-amber-700 mt-1">Reason: {order.cancelReason}</p>
+                                ) : null}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={handleRejectCancelRequest}
+                                    className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider bg-white border border-amber-200 text-slate-700 hover:bg-amber-100"
+                                >
+                                    Reject
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleApproveCancelRefund}
+                                    className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider bg-emerald-600 text-white hover:bg-emerald-700"
+                                >
+                                    Approve → Wallet
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     {/* Items Section */}
                     <Card className="border-none shadow-xl ring-1 ring-slate-100 bg-white rounded-xl overflow-hidden">
                         <div className="p-6 border-b border-slate-50 bg-slate-50/30 flex items-center justify-between">

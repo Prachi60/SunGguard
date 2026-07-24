@@ -5,12 +5,12 @@
 import mongoose from "mongoose";
 import Notification from "../models/notification.js";
 import Delivery from "../models/delivery.js";
-import { 
+import {
   getDeliveryPartnerIdsWithinSellerRadius,
   getDeliveryPartnerIdsWithinCustomerRadius,
   getParcelRiderIdsNearPickup,
-  getAllEligibleParcelRiderIds,
 } from "./deliveryNearbyService.js";
+import { getParcelSellerIdsNearPickup } from "./sellerNearbyService.js";
 import { emitNotificationEvent } from "../modules/notifications/notification.emitter.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
 
@@ -102,6 +102,26 @@ export function emitToAdmins(event, payload) {
   const s = getIo();
   if (!s || !event) return;
   s.to("admin:orders").emit(event, payload);
+}
+
+/** Notify parcel hub sellers whose service radius covers the pickup location. */
+export async function emitParcelNewToNearbySellers(parcel) {
+  const lat = Number(parcel?.pickupAddress?.lat);
+  const lng = Number(parcel?.pickupAddress?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  const sellerIds = await getParcelSellerIdsNearPickup(lat, lng);
+  if (!sellerIds.length) return;
+
+  const s = getIo();
+  if (!s) return;
+
+  const payload =
+    parcel && typeof parcel.toObject === "function" ? parcel.toObject() : parcel;
+
+  for (const sellerId of sellerIds) {
+    s.to(`seller:${sellerId}`).emit("parcel:new", payload);
+  }
 }
 
 /**
@@ -324,25 +344,10 @@ export async function emitReturnBroadcastForCustomer(customerLocation, payload) 
  */
 export async function emitParcelBroadcast(lat, lng, radiusKm, payload) {
   const s = getIo();
-  // Parcel-only + "both" riders (isParcelService: true), online, verified, free.
+  // Parcel-only + "both" riders (isParcelService: true), online, verified.
   let ids = await getParcelRiderIdsNearPickup(lat, lng, radiusKm);
-  let usedFallback = false;
-
-  // If nobody has a usable GPS fix inside radius, still notify all eligible
-  // parcel/both riders so the request is not silently dropped.
-  if (!ids.length) {
-    ids = await getAllEligibleParcelRiderIds();
-    usedFallback = ids.length > 0;
-  }
 
   if (!ids.length) {
-    if (s) {
-      s.to("delivery:online").emit("parcel:broadcast", {
-        ...payload,
-        at: new Date().toISOString(),
-        _fallbackBroadcast: true,
-      });
-    }
     return { ids: [] };
   }
 
@@ -352,7 +357,6 @@ export async function emitParcelBroadcast(lat, lng, radiusKm, payload) {
   const body = {
     ...payload,
     at: new Date().toISOString(),
-    _fallbackBroadcast: usedFallback || undefined,
   };
 
   if (s) {

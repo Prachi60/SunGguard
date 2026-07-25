@@ -12,6 +12,7 @@ import {
   adminApproveParcelLateRefund,
   adminRejectParcelLateRefund,
   adminGetParcels,
+  adminGetParcelById,
   adminAssignRider,
   adminGetPricingConfig,
   adminUpdatePricingConfig,
@@ -128,6 +129,8 @@ router.put(
   allowRoles("admin", "parcel_admin"),
   adminUpdateParcelReviewStatus,
 );
+// Keep parameterized route AFTER static /admin/* paths.
+router.get("/admin/:parcelId", verifyToken, allowRoles("admin", "parcel_admin"), adminGetParcelById);
 
 /* ==========================================================================
    DELIVERY PARTNER API ROUTES

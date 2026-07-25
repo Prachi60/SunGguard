@@ -5,8 +5,8 @@
 
 :root {
   /* Brand colors: overridden at runtime by SettingsContext from API (settings.primaryColor, settings.secondaryColor) */
-  --primary: #0284c7; /* Default brand blue */
-  --primary-color: #0284c7;
+  --primary: #0C831F; /* Default brand green */
+  --primary-color: #0C831F;
   
   /* Dynamic Brand Shades based on primary */
   --brand-50: color-mix(in srgb, var(--primary), white 95%);

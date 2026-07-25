@@ -26,6 +26,7 @@ import { WishlistProvider } from '../context/WishlistContext';
 import { CartProvider } from '../context/CartContext';
 import { CartAnimationProvider } from '../context/CartAnimationContext';
 import { LocationProvider } from '../context/LocationContext';
+import LocationGate from '../components/shared/LocationGate';
 
 import ProtectedRoute from '../../../core/guards/ProtectedRoute';
 
@@ -36,6 +37,7 @@ const CustomerRoutes = () => {
                 <CartProvider>
                     <CartAnimationProvider>
                         <ScrollToTop />
+                        <LocationGate />
                         <Routes>
                             <Route path="/" element={<Home />} />
                             <Route path="categories" element={<CategoriesPage />} />

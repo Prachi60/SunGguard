@@ -139,7 +139,7 @@ const ALL_CATEGORY = {
   name: "All",
   icon: HomeIcon,
   theme: DEFAULT_CATEGORY_THEME,
-  headerColor: "#0e7490",
+  headerColor: "#0C831F",
   headerFontColor: "#111111",
   headerIconColor: "#111111",
   banner: {
@@ -419,21 +419,13 @@ const Home = () => {
         </div>
       ) : (
         <>
-          <motion.div ref={heroRef} className="block md:hidden will-change-transform" style={isMobile ? { opacity: 1 } : { opacity, y, scale, pointerEvents }}>
-            <div className="relative w-full overflow-hidden">
-              {heroConfig.banners?.items?.length ? (
+          {heroConfig.banners?.items?.length > 0 && (
+            <motion.div ref={heroRef} className="block md:hidden will-change-transform" style={isMobile ? { opacity: 1 } : { opacity, y, scale, pointerEvents }}>
+              <div className="relative w-full overflow-hidden">
                 <ExperienceBannerCarousel section={{ title: "" }} items={heroConfig.banners.items} fullWidth edgeToEdge />
-              ) : (
-                <div className="w-full h-[190px] bg-[#ecfeff] p-6 relative overflow-hidden flex items-center border-y border-primary/10 shadow-sm">
-                  <div className="relative z-10 w-3/5 flex flex-col items-start gap-2">
-                    <h4 className="text-2xl font-black text-[#1A1A1A] tracking-tight">Get <span className="text-primary">Products</span></h4>
-                    <button className="bg-[#FF1E56] text-white px-6 py-2.5 rounded-2xl font-black text-xs tracking-wide">Order now</button>
-                  </div>
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 rounded-full blur-2xl -mt-12 -mr-12" />
-                </div>
-              )}
-            </div>
-          </motion.div>
+              </div>
+            </motion.div>
+          )}
 
           <PromoMarquee />
           <QuickCategorySlider categories={effectiveQuickCategories} onCategoryClick={(id) => navigate(`/category/${id}`)} />

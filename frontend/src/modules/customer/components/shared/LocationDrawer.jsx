@@ -7,7 +7,7 @@ import { loadGoogleMaps } from "../../../../core/services/googleMapsLoader";
 import { customerApi } from "../../services/customerApi";
 import { getCachedGeocode, setCachedGeocode } from "@/core/utils/geocodeCache";
 
-const LocationDrawer = ({ isOpen, onClose }) => {
+const LocationDrawer = ({ isOpen, onClose, required = false }) => {
   const navigate = useNavigate();
   const {
     currentLocation,
@@ -204,33 +204,33 @@ const LocationDrawer = ({ isOpen, onClose }) => {
           {
             name: result.formatted_address || prediction.description,
             time: "12-15 mins",
-            city: city || currentLocation.city,
-            state: state || currentLocation.state,
-            pincode: pincode || currentLocation.pincode,
-            latitude: geometry.lat(),
-            longitude: geometry.lng(),
-          },
-          { persist: true, updateSavedHome: false },
-        );
+                        city: city || currentLocation?.city || "",
+                        state: state || currentLocation?.state || "",
+                        pincode: pincode || currentLocation?.pincode || "",
+                        latitude: geometry.lat(),
+                        longitude: geometry.lng(),
+                      },
+                      { persist: true, updateSavedHome: false },
+                    );
 
-        setSearchQuery("");
-        setPlacePredictions([]);
-        setPlacesError("");
-        setIsSearchFocused(false);
-        resetAutocompleteSession();
-        onClose();
-      });
-    },
-    [
-      currentLocation.city,
-      currentLocation.pincode,
-      currentLocation.state,
-      getComponent,
-      onClose,
-      resetAutocompleteSession,
-      updateLocation,
-    ],
-  );
+                    setSearchQuery("");
+                    setPlacePredictions([]);
+                    setPlacesError("");
+                    setIsSearchFocused(false);
+                    resetAutocompleteSession();
+                    onClose();
+                  });
+                },
+                [
+                  currentLocation?.city,
+                  currentLocation?.pincode,
+                  currentLocation?.state,
+                  getComponent,
+                  onClose,
+                  resetAutocompleteSession,
+                  updateLocation,
+                ],
+              );
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -337,7 +337,7 @@ const LocationDrawer = ({ isOpen, onClose }) => {
         <>
           {/* Backdrop */}
           <motion.div
-            onClick={onClose}
+            onClick={required ? undefined : onClose}
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[600]"
           />
 
@@ -353,11 +353,13 @@ const LocationDrawer = ({ isOpen, onClose }) => {
             <div className="sticky top-0 bg-[#F3F4F6] px-6 pt-6 pb-4 flex flex-col gap-4 z-20">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-extrabold text-[#1A1A1A]">
-                  Select delivery location
+                  {required ? "Choose your location" : "Select delivery location"}
                 </h2>
                 <button
                   onClick={onClose}
-                  className="h-10 w-10 bg-black/5 hover:bg-black/10 rounded-full flex items-center justify-center transition-colors">
+                  className="h-10 w-10 bg-black/5 hover:bg-black/10 rounded-full flex items-center justify-center transition-colors"
+                  aria-label={required ? "Back" : "Close"}
+                >
                   <X size={20} className="text-[#1A1A1A]" />
                 </button>
               </div>
@@ -461,9 +463,11 @@ const LocationDrawer = ({ isOpen, onClose }) => {
                       ? "Detecting..."
                       : "Use current location"}
                   </h3>
-                  <p className="text-[12px] text-slate-400 font-medium truncate opacity-60">
-                    ({currentLocation.name})
-                  </p>
+                  {currentLocation?.name ? (
+                    <p className="text-[12px] text-slate-400 font-medium truncate opacity-60">
+                      ({currentLocation.name})
+                    </p>
+                  ) : null}
                 </div>
                 <ChevronRight size={16} className="text-slate-300 flex-shrink-0" />
               </button>

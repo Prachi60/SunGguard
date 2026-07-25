@@ -105,6 +105,16 @@ function formatStatusLabel(status) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Bottom sheet snap heights (vh). Drag handle up/down to switch. */
+const SHEET_SNAPS = [36, 58, 88];
+const DEFAULT_SHEET_VH = 58;
+
+function nearestSheetSnap(vh) {
+  return SHEET_SNAPS.reduce((best, snap) =>
+    Math.abs(snap - vh) < Math.abs(best - vh) ? snap : best,
+  );
+}
+
 const ParcelSearchTrackingPage = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -116,6 +126,51 @@ const ParcelSearchTrackingPage = () => {
   const [sliderIndex, setSliderIndex] = useState(0);
   const [directions, setDirections] = useState(null);
   const [routeDistanceM, setRouteDistanceM] = useState(null);
+  const [sheetVh, setSheetVh] = useState(DEFAULT_SHEET_VH);
+  const [isSheetDragging, setIsSheetDragging] = useState(false);
+  const sheetDragRef = useRef({
+    active: false,
+    pointerId: null,
+    startY: 0,
+    startVh: DEFAULT_SHEET_VH,
+  });
+
+  const onSheetHandlePointerDown = useCallback((e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    sheetDragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      startVh: sheetVh,
+    };
+    setIsSheetDragging(true);
+  }, [sheetVh]);
+
+  const onSheetHandlePointerMove = useCallback((e) => {
+    const drag = sheetDragRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId) return;
+    const deltaY = drag.startY - e.clientY;
+    const next = Math.min(
+      SHEET_SNAPS[SHEET_SNAPS.length - 1],
+      Math.max(SHEET_SNAPS[0], drag.startVh + (deltaY / window.innerHeight) * 100),
+    );
+    setSheetVh(next);
+  }, []);
+
+  const endSheetDrag = useCallback((e) => {
+    const drag = sheetDragRef.current;
+    if (!drag.active || (e?.pointerId != null && drag.pointerId !== e.pointerId)) return;
+    sheetDragRef.current.active = false;
+    setIsSheetDragging(false);
+    setSheetVh((prev) => nearestSheetSnap(prev));
+  }, []);
+
+  const toggleSheetSnap = useCallback(() => {
+    setSheetVh((prev) => {
+      const idx = SHEET_SNAPS.findIndex((s) => s === nearestSheetSnap(prev));
+      return SHEET_SNAPS[(idx + 1) % SHEET_SNAPS.length];
+    });
+  }, []);
 
   const { isLoaded } = useJsApiLoader({
     id: "google-map-script",
@@ -354,7 +409,7 @@ const ParcelSearchTrackingPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 -mx-4 md:mx-0 relative font-outfit overflow-x-hidden">
+    <div className="h-screen bg-slate-100 -mx-4 md:mx-0 relative font-outfit overflow-hidden">
       <div className="absolute inset-0 z-0">
         {isLoaded ? (
           <GoogleMap
@@ -462,10 +517,38 @@ const ParcelSearchTrackingPage = () => {
         </div>
       </div>
 
-      <div className="absolute inset-x-0 bottom-4 z-20 px-4">
-        <div className="bg-white/95 backdrop-blur-md rounded-[28px] px-5 pt-4 pb-5 shadow-[0_16px_40px_rgba(15,23,42,0.20)] border border-slate-100 max-w-[372px] mx-auto">
-          <div className="h-1.5 w-14 bg-slate-200 rounded-full mx-auto mb-4" />
+      <div className="absolute inset-x-0 bottom-0 z-20 pointer-events-none px-0 sm:px-4 sm:pb-4">
+        <div
+          className="pointer-events-auto bg-white/95 backdrop-blur-md rounded-t-[28px] sm:rounded-[28px] shadow-[0_16px_40px_rgba(15,23,42,0.20)] border border-slate-100 max-w-[420px] mx-auto flex flex-col min-h-0 will-change-[height]"
+          style={{
+            height: `${sheetVh}vh`,
+            maxHeight: "92vh",
+            transition: isSheetDragging ? "none" : "height 220ms ease-out",
+          }}
+        >
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Drag sheet up or down"
+            onPointerDown={onSheetHandlePointerDown}
+            onPointerMove={onSheetHandlePointerMove}
+            onPointerUp={endSheetDrag}
+            onPointerCancel={endSheetDrag}
+            onDoubleClick={toggleSheetSnap}
+            className="shrink-0 touch-none select-none cursor-grab active:cursor-grabbing pt-3 pb-2 px-5"
+          >
+            <div className="h-1.5 w-14 bg-slate-300 rounded-full mx-auto" />
+            <p className="mt-1.5 text-center text-[10px] font-bold text-slate-400 tracking-wide">
+              Swipe up / down
+            </p>
+          </div>
 
+          <div
+            data-lenis-prevent
+            data-lenis-prevent-touch
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y px-5 pb-5"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
           <h2 className="text-[20px] md:text-[22px] leading-tight font-black text-slate-900 tracking-[-0.01em]">
             {statusUi.title}
           </h2>
@@ -647,6 +730,7 @@ const ParcelSearchTrackingPage = () => {
               {TERMINAL_STATUSES.has(parcel.status) ? "Back to Parcel" : "Open Parcel History"}
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>

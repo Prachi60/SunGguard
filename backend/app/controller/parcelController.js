@@ -698,6 +698,39 @@ export const adminGetParcels = async (req, res) => {
   }
 };
 
+/** Fresh single parcel for admin detail modal (includes proof images). */
+export const adminGetParcelById = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    const parcel = await Parcel.findById(parcelId)
+      .populate("customerId", "name phone email")
+      .populate("deliveryPartnerId", "name phone vehicleType vehicleNumber profileImage")
+      .populate("sellerId", "name shopName phone address location");
+
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+
+    const plain = parcel.toObject ? parcel.toObject() : { ...parcel };
+    const lateSummary = getParcelLatePickupSummary(plain);
+    if (lateSummary) {
+      plain.pickupSla = {
+        minutes: lateSummary.slaMinutes,
+        deadlineAt: lateSummary.deadlineAt,
+        acceptedAt: lateSummary.acceptedAt,
+        isLate: lateSummary.isLate,
+        lateByMinutes: lateSummary.lateByMinutes,
+        lateByLabel: lateSummary.lateByLabel,
+        stillAwaitingPickup: lateSummary.stillAwaitingPickup,
+      };
+    }
+
+    return handleResponse(res, 200, "Parcel retrieved successfully", plain);
+  } catch (error) {
+    return handleResponse(res, 500, error.message);
+  }
+};
+
 /** Customer: request wallet compensation when Normal pickup exceeds 30 min. */
 export const requestParcelLateRefund = async (req, res) => {
   try {
@@ -1302,12 +1335,24 @@ export const riderUpdateStatus = async (req, res) => {
       if (providedOtp !== String(parcel.otp || "").trim()) {
         return handleResponse(res, 400, "Invalid pickup OTP");
       }
+      const proofUrl = String(pickupProofImage || "").trim();
+      if (
+        !proofUrl ||
+        !(
+          /^https?:\/\//i.test(proofUrl) ||
+          /^data:image\//i.test(proofUrl)
+        )
+      ) {
+        return handleResponse(
+          res,
+          400,
+          "Upload a pickup photo proof at the customer location",
+        );
+      }
+      parcel.pickupProofImage = proofUrl;
     }
 
     parcel.status = status;
-    if (status === "PICKED_UP" && pickupProofImage) {
-      parcel.pickupProofImage = pickupProofImage;
-    }
 
     // COD: rider collects full fare cash from customer at pickup.
     if (status === "PICKED_UP" && isParcelCod(parcel)) {
@@ -1406,10 +1451,23 @@ export const riderCompleteDelivery = async (req, res) => {
       );
     }
 
-    parcel.status = "DELIVERED";
-    if (deliveryProofImage) {
-      parcel.deliveryProofImage = deliveryProofImage;
+    const hubProofUrl = String(deliveryProofImage || "").trim();
+    if (
+      !hubProofUrl ||
+      !(
+        /^https?:\/\//i.test(hubProofUrl) ||
+        /^data:image\//i.test(hubProofUrl)
+      )
+    ) {
+      return handleResponse(
+        res,
+        400,
+        "Upload a photo proof when dropping the parcel at the hub",
+      );
     }
+
+    parcel.status = "DELIVERED";
+    parcel.deliveryProofImage = hubProofUrl;
 
     // COD: rider hands full cash to seller; admin payment waits for seller Razorpay remit.
     // UPI/online: already PAID at booking.

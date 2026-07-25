@@ -1225,7 +1225,7 @@ const ParcelDeliveryPage = () => {
             <div className="space-y-6">
               <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
                 <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                  <Zap className="text-primary" size={20} /> Delivery Speed
+                  <Zap className="text-primary" size={20} /> Delivery Pickup Speed
                 </h2>
 
                 <div className="grid grid-cols-2 gap-3">

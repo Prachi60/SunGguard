@@ -19,6 +19,7 @@ export const parcelApi = {
 
   // Admin APIs
   adminGetParcels: () => axiosInstance.get("/parcel/admin/all"),
+  adminGetParcel: (parcelId) => axiosInstance.get(`/parcel/admin/${parcelId}`),
   adminAssignRider: (data) => axiosInstance.post("/parcel/admin/assign-rider", data),
   adminApproveLateRefund: (parcelId, data = {}) =>
     axiosInstance.put(`/parcel/admin/late-refund/${parcelId}/approve`, data),

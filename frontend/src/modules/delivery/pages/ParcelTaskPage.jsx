@@ -4,6 +4,7 @@ import { GoogleMap, Marker, OverlayView, useJsApiLoader } from "@react-google-ma
 import { MapPin, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { parcelApi } from "../../customer/services/parcelApi";
+import ParcelProofCapture from "../components/ParcelProofCapture";
 import {
   getCachedDeliveryPartnerLocation,
   getCurrentPositionWithCache,
@@ -20,6 +21,15 @@ const MAP_LIBRARIES = ["geometry"];
 const TO_CUSTOMER_STATUSES = new Set(["ACCEPTED", "RIDER_ASSIGNED", "PICKUP_REACHED"]);
 
 const ROUTE_REFRESH_MS = 20000;
+/** Bottom sheet snap heights (vh). Drag handle up/down to switch. */
+const SHEET_SNAPS = [34, 58, 88];
+const DEFAULT_SHEET_VH = 58;
+
+function nearestSheetSnap(vh) {
+  return SHEET_SNAPS.reduce((best, snap) =>
+    Math.abs(snap - vh) < Math.abs(best - vh) ? snap : best,
+  );
+}
 
 function toLatLng(point) {
   if (!point) return null;
@@ -52,6 +62,8 @@ const ParcelTaskPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [otp, setOtp] = useState("");
+  const [pickupProofUrl, setPickupProofUrl] = useState("");
+  const [hubProofUrl, setHubProofUrl] = useState("");
   const [parcel, setParcel] = useState(null);
   const [routeData, setRouteData] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -60,12 +72,57 @@ const ParcelTaskPage = () => {
     const cached = getCachedDeliveryPartnerLocation(30 * 60 * 1000);
     return cached ? { lat: cached.lat, lng: cached.lng } : null;
   });
+  const [sheetVh, setSheetVh] = useState(DEFAULT_SHEET_VH);
+  const [isSheetDragging, setIsSheetDragging] = useState(false);
   const mapRef = useRef(null);
   const routePolylineRef = useRef(null);
   const assignedRequestRef = useRef({ inFlight: false, lastFetchedAt: 0 });
   const lastRouteKeyRef = useRef("");
   const lastRouteAtRef = useRef(0);
   const routeAbortRef = useRef(null);
+  const sheetDragRef = useRef({
+    active: false,
+    pointerId: null,
+    startY: 0,
+    startVh: DEFAULT_SHEET_VH,
+  });
+
+  const onSheetHandlePointerDown = useCallback((e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    sheetDragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      startVh: sheetVh,
+    };
+    setIsSheetDragging(true);
+  }, [sheetVh]);
+
+  const onSheetHandlePointerMove = useCallback((e) => {
+    const drag = sheetDragRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId) return;
+    const deltaY = drag.startY - e.clientY; // up = expand
+    const next = Math.min(
+      SHEET_SNAPS[SHEET_SNAPS.length - 1],
+      Math.max(SHEET_SNAPS[0], drag.startVh + (deltaY / window.innerHeight) * 100),
+    );
+    setSheetVh(next);
+  }, []);
+
+  const endSheetDrag = useCallback((e) => {
+    const drag = sheetDragRef.current;
+    if (!drag.active || (e?.pointerId != null && drag.pointerId !== e.pointerId)) return;
+    sheetDragRef.current.active = false;
+    setIsSheetDragging(false);
+    setSheetVh((prev) => nearestSheetSnap(prev));
+  }, []);
+
+  const toggleSheetSnap = useCallback(() => {
+    setSheetVh((prev) => {
+      const idx = SHEET_SNAPS.findIndex((s) => s === nearestSheetSnap(prev));
+      return SHEET_SNAPS[(idx + 1) % SHEET_SNAPS.length];
+    });
+  }, []);
 
   const { isLoaded, loadError } = useJsApiLoader({
     id: "google-map-script",
@@ -373,12 +430,17 @@ const ParcelTaskPage = () => {
       toast.error("Enter the OTP shared by the customer");
       return;
     }
+    if (!pickupProofUrl) {
+      toast.error("Upload a photo proof at the customer location");
+      return;
+    }
     setSaving(true);
     try {
       const res = await parcelApi.riderUpdateStatus({
         parcelId: parcel._id,
         status: "PICKED_UP",
         otp: code,
+        pickupProofImage: pickupProofUrl,
       });
       if (res.data?.success) {
         const next = res.data.result || parcel;
@@ -398,6 +460,7 @@ const ParcelTaskPage = () => {
         lastRouteAtRef.current = 0;
         setRouteData(null);
         setOtp("");
+        setPickupProofUrl("");
         toast.success("Pickup confirmed. Proceed to seller hub.");
       } else {
         toast.error(res.data?.message || "Invalid OTP");
@@ -411,10 +474,15 @@ const ParcelTaskPage = () => {
 
   const handleHubDrop = async () => {
     if (!parcel || saving) return;
+    if (!hubProofUrl) {
+      toast.error("Upload a photo proof at the hub before confirming drop");
+      return;
+    }
     setSaving(true);
     try {
       const res = await parcelApi.riderCompleteDelivery({
         parcelId: parcel._id,
+        deliveryProofImage: hubProofUrl,
       });
       if (res.data?.success) {
         toast.success("Parcel dropped at hub");
@@ -598,10 +666,38 @@ const ParcelTaskPage = () => {
         )}
       </div>
 
-      <div className="absolute inset-x-0 bottom-0 z-20">
-        <div className="bg-white rounded-t-[24px] shadow-[0_-20px_50px_rgba(15,23,42,0.16)] px-5 pt-4 pb-5 max-h-[66vh] overflow-y-auto space-y-3">
-          <div className="mx-auto h-1.5 w-12 rounded-full bg-slate-200" />
+      <div className="absolute inset-x-0 bottom-0 z-20 pointer-events-none">
+        <div
+          className="pointer-events-auto bg-white rounded-t-[24px] shadow-[0_-20px_50px_rgba(15,23,42,0.16)] flex flex-col min-h-0 will-change-[height]"
+          style={{
+            height: `${sheetVh}vh`,
+            maxHeight: "92vh",
+            transition: isSheetDragging ? "none" : "height 220ms ease-out",
+          }}
+        >
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Drag sheet up or down"
+            onPointerDown={onSheetHandlePointerDown}
+            onPointerMove={onSheetHandlePointerMove}
+            onPointerUp={endSheetDrag}
+            onPointerCancel={endSheetDrag}
+            onDoubleClick={toggleSheetSnap}
+            className="shrink-0 touch-none select-none cursor-grab active:cursor-grabbing pt-2.5 pb-2 px-4"
+          >
+            <div className="mx-auto h-1.5 w-12 rounded-full bg-slate-300" />
+            <p className="mt-1.5 text-center text-[10px] font-bold text-slate-400 tracking-wide">
+              Swipe up / down
+            </p>
+          </div>
 
+          <div
+            data-lenis-prevent
+            data-lenis-prevent-touch
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y px-5 pb-6 space-y-3"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-2.5 py-2 space-y-1.5">
             <div className="flex items-start gap-2">
               <MapPin className="h-4 w-4 mt-0.5 text-brand-600" />
@@ -669,13 +765,20 @@ const ParcelTaskPage = () => {
           )}
 
           {parcel.status === "PICKUP_REACHED" && !completed && !cancelled && (
-            <div className="rounded-xl border border-orange-200 bg-orange-50/80 px-3 py-2.5 space-y-2">
+            <div className="rounded-xl border border-orange-200 bg-orange-50/80 px-3 py-2.5 space-y-3">
               <p className="text-xs font-bold text-slate-800">
                 Ask customer for pickup OTP
               </p>
               <p className="text-[11px] text-slate-600 leading-snug">
-                Enter the OTP shown on the customer app to confirm you collected the parcel. Hub drop unlocks only after this.
+                First capture a photo at the customer location, then enter the OTP shown on the customer app.
               </p>
+              <ParcelProofCapture
+                label="Pickup photo proof"
+                hint="Photo of parcel with customer / at pickup point"
+                value={pickupProofUrl}
+                onChange={setPickupProofUrl}
+                disabled={saving}
+              />
               <input
                 type="text"
                 inputMode="numeric"
@@ -688,7 +791,7 @@ const ParcelTaskPage = () => {
               <button
                 type="button"
                 onClick={handleConfirmPickupWithOtp}
-                disabled={saving || otp.trim().length < 4}
+                disabled={saving || otp.trim().length < 4 || !pickupProofUrl}
                 className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-black flex items-center justify-center gap-2 disabled:opacity-70"
               >
                 <CheckCircle2 size={16} />
@@ -700,11 +803,18 @@ const ParcelTaskPage = () => {
           {(parcel.status === "PICKED_UP" || parcel.status === "OUT_FOR_DELIVERY") &&
             !completed &&
             !cancelled && (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-3 py-2.5 space-y-2">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-3 py-2.5 space-y-3">
               <p className="text-xs font-bold text-slate-800">Drop at seller hub</p>
               <p className="text-[11px] text-slate-600 leading-snug">
-                No OTP needed here. Hand the parcel (and COD cash if any) to the hub, then confirm drop.
+                No OTP needed here. Upload a hub photo, hand the parcel (and COD cash if any) to the hub, then confirm.
               </p>
+              <ParcelProofCapture
+                label="Hub drop photo proof"
+                hint="Photo of parcel handed over at the seller hub"
+                value={hubProofUrl}
+                onChange={setHubProofUrl}
+                disabled={saving}
+              />
               {parcel.status === "PICKED_UP" && (
                 <button
                   type="button"
@@ -718,7 +828,7 @@ const ParcelTaskPage = () => {
               <button
                 type="button"
                 onClick={handleHubDrop}
-                disabled={saving}
+                disabled={saving || !hubProofUrl}
                 className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-black flex items-center justify-center gap-2 disabled:opacity-70"
               >
                 <CheckCircle2 size={16} />
@@ -754,6 +864,7 @@ const ParcelTaskPage = () => {
               Back to Dashboard
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>

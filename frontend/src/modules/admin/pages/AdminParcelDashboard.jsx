@@ -176,6 +176,7 @@ const AdminParcelDashboard = () => {
   const [parcels, setParcels] = useState([]);
   const [riders, setRiders] = useState([]);
   const [selectedParcel, setSelectedParcel] = useState(null);
+  const [selectedParcelLoading, setSelectedParcelLoading] = useState(false);
   const [lateRefundAmount, setLateRefundAmount] = useState("");
   const [lateRefundSaving, setLateRefundSaving] = useState(false);
   const [parcelReviews, setParcelReviews] = useState([]);
@@ -206,6 +207,8 @@ const AdminParcelDashboard = () => {
   const [courierDeleting, setCourierDeleting] = useState(false);
   const courierEditScrollRef = useRef(null);
   const courierEditModalRef = useRef(null);
+  const parcelDetailScrollRef = useRef(null);
+  const parcelDetailModalRef = useRef(null);
 
   const modalOpen = Boolean(selectedParcel || courierEditModalOpen || courierToDelete);
 
@@ -233,20 +236,26 @@ const AdminParcelDashboard = () => {
     };
   }, [modalOpen]);
 
+  // Touchpad/wheel: body is locked + Lenis steals events — manually scroll modal bodies.
   useEffect(() => {
-    if (!courierEditModalOpen) return undefined;
+    if (!selectedParcel && !courierEditModalOpen) return undefined;
 
     const handleWheel = (event) => {
-      const modalEl = courierEditModalRef.current;
-      const scrollEl = courierEditScrollRef.current;
-      const dialogEl = modalEl?.querySelector("[data-courier-edit-dialog]");
+      const parcelModal = parcelDetailModalRef.current;
+      const courierModal = courierEditModalRef.current;
 
-      if (!modalEl?.contains(event.target)) {
-        event.preventDefault();
-        return;
-      }
+      let scrollEl = null;
 
-      if (!dialogEl?.contains(event.target)) {
+      if (parcelModal?.contains(event.target)) {
+        scrollEl = parcelDetailScrollRef.current;
+      } else if (courierModal?.contains(event.target)) {
+        const dialogEl = courierModal.querySelector("[data-courier-edit-dialog]");
+        if (dialogEl && !dialogEl.contains(event.target)) {
+          event.preventDefault();
+          return;
+        }
+        scrollEl = courierEditScrollRef.current;
+      } else {
         event.preventDefault();
         return;
       }
@@ -271,7 +280,7 @@ const AdminParcelDashboard = () => {
     return () => {
       document.removeEventListener("wheel", handleWheel, { capture: true });
     };
-  }, [courierEditModalOpen]);
+  }, [selectedParcel, courierEditModalOpen]);
 
   // Pricing Config state
   const [pricing, setPricing] = useState({
@@ -447,18 +456,46 @@ const AdminParcelDashboard = () => {
     };
   }, [fetchData]);
 
+  const openParcelDetail = useCallback(async (parcel) => {
+    if (!parcel?._id) return;
+    setSelectedParcel(parcel);
+    setSelectedParcelLoading(true);
+    try {
+      const res = await parcelApi.adminGetParcel(parcel._id);
+      if (res.data?.success && res.data.result) {
+        setSelectedParcel(res.data.result);
+      }
+    } catch (error) {
+      console.error("Failed to refresh parcel detail:", error);
+    } finally {
+      setSelectedParcelLoading(false);
+    }
+  }, []);
+
+  // Keep open modal in sync when list refreshes (proofs appear after rider upload).
+  useEffect(() => {
+    if (!selectedParcel?._id || !parcels.length) return;
+    const fresh = parcels.find((p) => String(p._id) === String(selectedParcel._id));
+    if (!fresh) return;
+    const samePickup = fresh.pickupProofImage === selectedParcel.pickupProofImage;
+    const sameDrop = fresh.deliveryProofImage === selectedParcel.deliveryProofImage;
+    const sameStatus = fresh.status === selectedParcel.status;
+    if (samePickup && sameDrop && sameStatus) return;
+    setSelectedParcel((prev) => ({ ...prev, ...fresh }));
+  }, [parcels, selectedParcel?._id, selectedParcel?.pickupProofImage, selectedParcel?.deliveryProofImage, selectedParcel?.status]);
+
   // Open parcel details when navigated from notification / alert (`?parcelId=`)
   useEffect(() => {
     const parcelId = searchParams.get("parcelId");
     if (!parcelId || !parcels.length) return;
     const match = parcels.find((p) => String(p._id) === String(parcelId));
     if (!match) return;
-    setSelectedParcel(match);
+    openParcelDetail(match);
     setActiveTab("all");
     const next = new URLSearchParams(searchParams);
     next.delete("parcelId");
     setSearchParams(next, { replace: true });
-  }, [parcels, searchParams, setSearchParams]);
+  }, [parcels, searchParams, setSearchParams, openParcelDetail]);
 
   // Live status updates (assigned rider / progress / delivered)
   useEffect(() => {
@@ -474,6 +511,10 @@ const AdminParcelDashboard = () => {
         if (!exists) return prev;
         return prev.map((p) => (String(p._id) === String(id) ? { ...p, ...updated } : p));
       });
+
+      setSelectedParcel((prev) =>
+        prev && String(prev._id) === String(id) ? { ...prev, ...updated } : prev,
+      );
 
       // keep summary reasonably fresh
       fetchData(true);
@@ -792,7 +833,7 @@ const AdminParcelDashboard = () => {
                         <tr
                           key={parcel._id}
                           className="hover:bg-slate-50/50 cursor-pointer transition-colors"
-                          onClick={() => setSelectedParcel(parcel)}
+                          onClick={() => openParcelDetail(parcel)}
                         >
                           <td className="p-4 align-top">
                             <span className="font-bold text-slate-800">#{parcel._id.slice(-6)}</span>
@@ -918,7 +959,7 @@ const AdminParcelDashboard = () => {
                       <div
                         key={parcel._id}
                         className="p-5 hover:bg-slate-50/50 flex flex-col md:flex-row justify-between gap-4 cursor-pointer transition-colors"
-                        onClick={() => setSelectedParcel(parcel)}
+                        onClick={() => openParcelDetail(parcel)}
                       >
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
@@ -1755,7 +1796,11 @@ const AdminParcelDashboard = () => {
 
       {/* Selected Parcel Details Modal */}
       {selectedParcel && (
-        <div className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 overflow-hidden overscroll-none">
+        <div
+          ref={parcelDetailModalRef}
+          className="fixed inset-0 z-[1000] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 overflow-hidden overscroll-none"
+          data-lenis-prevent
+        >
           <style>{`
             .modal-scroll-pad::-webkit-scrollbar {
               width: 10px;
@@ -1774,7 +1819,7 @@ const AdminParcelDashboard = () => {
               background: #94a3b8 !important;
             }
           `}</style>
-          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col relative overflow-hidden">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col relative overflow-hidden min-h-0">
             {/* Header - Fixed */}
             <div className="p-6 border-b border-slate-100 flex justify-between items-start shrink-0">
               <div>
@@ -1795,7 +1840,13 @@ const AdminParcelDashboard = () => {
             </div>
 
             {/* Content - Scrollable */}
-            <div className="p-6 overflow-y-auto overscroll-contain space-y-6 flex-1 modal-scroll-pad">
+            <div
+              ref={parcelDetailScrollRef}
+              data-lenis-prevent
+              data-lenis-prevent-wheel
+              className="p-6 overflow-y-auto overscroll-contain space-y-6 flex-1 min-h-0 modal-scroll-pad"
+              style={{ WebkitOverflowScrolling: "touch", overscrollBehavior: "contain" }}
+            >
               {selectedParcel.lateRefundRequest?.status === "requested" && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 space-y-3">
                   <div>
@@ -2052,11 +2103,18 @@ const AdminParcelDashboard = () => {
 
               {/* Proof Photos Section */}
               <div className="space-y-4 border-t border-slate-100 pt-4">
-                <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Delivery Evidence Photos</h4>
+                <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                  Delivery Evidence Photos
+                  {selectedParcelLoading ? (
+                    <span className="ml-2 text-[10px] font-bold text-slate-400 normal-case tracking-normal">
+                      Refreshing…
+                    </span>
+                  ) : null}
+                </h4>
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Pickup Proof</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Pickup at Customer</span>
                     {selectedParcel.pickupProofImage ? (
                       <div className="h-40 w-full rounded-2xl overflow-hidden border border-slate-100 shadow-sm bg-slate-50">
                         <img
@@ -2064,7 +2122,15 @@ const AdminParcelDashboard = () => {
                           alt="Pickup Proof"
                           className="h-full w-full object-cover cursor-pointer hover:scale-105 transition-transform"
                           onClick={() => window.open(selectedParcel.pickupProofImage, "_blank")}
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                            const fallback = e.currentTarget.nextElementSibling;
+                            if (fallback) fallback.classList.remove("hidden");
+                          }}
                         />
+                        <div className="hidden h-full w-full flex items-center justify-center p-3 text-[10px] text-rose-500 font-semibold text-center">
+                          Image failed to load
+                        </div>
                       </div>
                     ) : (
                       <div className="h-40 w-full rounded-2xl border border-dashed border-slate-200 flex items-center justify-center text-center p-3 text-[10px] text-slate-400 bg-slate-50/50">
@@ -2074,19 +2140,27 @@ const AdminParcelDashboard = () => {
                   </div>
 
                   <div className="space-y-1.5">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Delivery Proof</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Hub Drop Proof</span>
                     {selectedParcel.deliveryProofImage ? (
                       <div className="h-40 w-full rounded-2xl overflow-hidden border border-slate-100 shadow-sm bg-slate-50">
                         <img
                           src={selectedParcel.deliveryProofImage}
-                          alt="Delivery Proof"
+                          alt="Hub Drop Proof"
                           className="h-full w-full object-cover cursor-pointer hover:scale-105 transition-transform"
                           onClick={() => window.open(selectedParcel.deliveryProofImage, "_blank")}
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                            const fallback = e.currentTarget.nextElementSibling;
+                            if (fallback) fallback.classList.remove("hidden");
+                          }}
                         />
+                        <div className="hidden h-full w-full flex items-center justify-center p-3 text-[10px] text-rose-500 font-semibold text-center">
+                          Image failed to load
+                        </div>
                       </div>
                     ) : (
                       <div className="h-40 w-full rounded-2xl border border-dashed border-slate-200 flex items-center justify-center text-center p-3 text-[10px] text-slate-400 bg-slate-50/50">
-                        No delivery proof uploaded
+                        No hub drop proof uploaded
                       </div>
                     )}
                   </div>

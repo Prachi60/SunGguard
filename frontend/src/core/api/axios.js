@@ -25,7 +25,9 @@ function tokenForRequestUrl(url) {
     if (!url) return null;
     if (url.startsWith('/seller')) return getStoredAuthToken(STORAGE_KEYS.AUTH_SELLER);
     if (url.startsWith('/admin') || url.includes('/admin/')) return getStoredAuthToken(STORAGE_KEYS.AUTH_ADMIN);
-    if (url.startsWith('/delivery') || url.includes('/rider/')) return getStoredAuthToken(STORAGE_KEYS.AUTH_DELIVERY);
+    if (url.startsWith('/delivery') || url.includes('/rider/') || url.startsWith('/media')) {
+        return getStoredAuthToken(STORAGE_KEYS.AUTH_DELIVERY);
+    }
     if (
         url.startsWith('/customer') ||
         url.startsWith('/cart') ||
@@ -64,8 +66,29 @@ axiosInstance.interceptors.request.use(
         let token = primaryStorageKey ? getStoredAuthToken(primaryStorageKey) : null;
 
         // Fallback 1: URL-derived token (cross-portal calls, e.g. admin → /products).
+        // For /media, prefer the active role token first (already set above).
         if (!token) {
             token = tokenForRequestUrl(url);
+            // /media URL fallback above returns delivery token; if admin/seller
+            // is active without primary token somehow, keep previous behavior.
+            if (
+                url.startsWith('/media') &&
+                activeRole === ROLES.ADMIN
+            ) {
+                token = getStoredAuthToken(STORAGE_KEYS.AUTH_ADMIN) || token;
+            }
+            if (
+                url.startsWith('/media') &&
+                activeRole === ROLES.SELLER
+            ) {
+                token = getStoredAuthToken(STORAGE_KEYS.AUTH_SELLER) || token;
+            }
+            if (
+                url.startsWith('/media') &&
+                activeRole === ROLES.CUSTOMER
+            ) {
+                token = getStoredAuthToken(STORAGE_KEYS.AUTH_CUSTOMER) || token;
+            }
         }
 
         // Fallback 2: customer token for un-prefixed/public-ish endpoints while

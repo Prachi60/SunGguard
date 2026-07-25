@@ -6,7 +6,6 @@ import { useWishlist } from '../../context/WishlistContext';
 import { useCart } from '../../context/CartContext';
 import { useLocation as useAppLocation } from "../../context/LocationContext";
 import { useSettings } from '@core/context/SettingsContext';
-import LocationDrawer from '../shared/LocationDrawer';
 
 const Header = () => {
     const { settings } = useSettings();
@@ -14,8 +13,11 @@ const Header = () => {
     const { cartCount } = useCart();
     const location = useLocation();
     const isCheckoutPage = location.pathname === '/checkout';
-    const [isLocationOpen, setIsLocationOpen] = useState(false);
-    const { currentLocation, refreshLocation } = useAppLocation();
+    const { currentLocation, openLocationPicker, isFetchingLocation } = useAppLocation();
+    const locationLabel = isFetchingLocation
+        ? "Detecting location..."
+        : (currentLocation?.name || "Select location");
+    const locationTime = currentLocation?.time || "—";
 
     // Search placeholder animation
     const [searchPlaceholder, setSearchPlaceholder] = useState('Search ');
@@ -78,10 +80,7 @@ const Header = () => {
                         type="button"
                         data-lenis-prevent
                         data-lenis-prevent-touch
-                        onClick={() => {
-                            refreshLocation();
-                            setIsLocationOpen(true);
-                        }}
+                        onClick={openLocationPicker}
                         className="flex items-center gap-3 cursor-pointer active:scale-95 transition-transform border-0 bg-transparent p-0 text-left"
                     >
                         <div className="h-10 w-10 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/30 shadow-sm">
@@ -90,10 +89,10 @@ const Header = () => {
                         <div className="flex flex-col leading-tight">
                             <span className="text-[10px] font-black text-white/80 uppercase tracking-widest flex items-center gap-1">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
-                                {currentLocation.time}
+                                {locationTime}
                             </span>
                             <div className="flex items-center gap-1 font-black text-white text-base">
-                                <span className="max-w-[150px] truncate">{currentLocation.name}</span> <span className="text-[10px] opacity-70">▼</span>
+                                <span className="max-w-[150px] truncate">{locationLabel}</span> <span className="text-[10px] opacity-70">▼</span>
                             </div>
                         </div>
                     </button>
@@ -112,18 +111,15 @@ const Header = () => {
                             type="button"
                             data-lenis-prevent
                             data-lenis-prevent-touch
-                            onClick={() => {
-                                refreshLocation();
-                                setIsLocationOpen(true);
-                            }}
+                            onClick={openLocationPicker}
                             className="hidden md:flex items-center gap-2 pl-6 border-l border-slate-200 cursor-pointer active:scale-95 transition-transform border-0 bg-transparent p-0"
                         >
                             <div className="flex flex-col items-start leading-none group">
                                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 group-hover:text-[var(--primary)] transition-colors">
-                                    Delivery in {currentLocation.time}
+                                    Delivery in {locationTime}
                                 </span>
                                 <div className="flex items-center gap-1 font-bold text-slate-700 text-sm group-hover:text-[var(--primary)] transition-colors">
-                                    <span className="max-w-[150px] truncate">{currentLocation.name}</span> <MapPin size={14} className="fill-current" />
+                                    <span className="max-w-[150px] truncate">{locationLabel}</span> <MapPin size={14} className="fill-current" />
                                 </div>
                             </div>
                         </button>
@@ -176,12 +172,6 @@ const Header = () => {
                     </div>
                 </div>
             </div>
-
-            {/* Location Selection Drawer */}
-            <LocationDrawer
-                isOpen={isLocationOpen}
-                onClose={() => setIsLocationOpen(false)}
-            />
         </header>
     );
 };

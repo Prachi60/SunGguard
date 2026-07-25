@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, useScroll, useTransform } from "framer-motion";
 import Lottie from "lottie-react";
-import LocationDrawer from "./LocationDrawer";
 import { useLocation } from "../../context/LocationContext";
 import { useProductDetail } from "../../context/ProductDetailContext";
 import { useSettings } from "@core/context/SettingsContext";
@@ -51,6 +50,10 @@ function CategoryNavColumn({
   const [lr, setLr] = useState({ l: 22, r: 78 });
 
   const measure = () => {
+    // Curve math is only used on small screens.
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
+      return;
+    }
     if (!isActive || !colRef.current || !labelRef.current) return;
     const col = colRef.current.getBoundingClientRect();
     const lab = labelRef.current.getBoundingClientRect();
@@ -86,8 +89,12 @@ function CategoryNavColumn({
       style={{
         borderBottomColor: isActive ? "transparent" : categoryAccent,
       }}
-      className="relative z-[2] flex flex-1 min-w-0 cursor-pointer flex-col items-center gap-0.5 border-b-2 px-1 sm:px-2 pb-0.5 pt-0.5">
-      <div className="relative z-10 flex h-9 w-9 items-center justify-center md:h-11 md:w-11">
+      className="relative z-[2] flex flex-1 min-w-0 cursor-pointer flex-col items-center gap-0.5 border-b-2 px-1 sm:px-2 pb-0.5 pt-0.5 md:border-b-0 md:pb-2">
+      <div
+        className={cn(
+          "relative z-10 flex h-9 w-9 items-center justify-center rounded-xl transition-colors duration-200 md:h-11 md:w-11",
+          isActive && "md:bg-black/[0.06]",
+        )}>
         {typeof cat.icon === "function" ||
         (typeof cat.icon === "object" && cat.icon.$$typeof) ? (
           <cat.icon
@@ -112,8 +119,8 @@ function CategoryNavColumn({
         <span
           ref={labelRef}
           className={cn(
-            "relative z-10 mx-auto block w-full max-w-full truncate px-0.5 pb-0.5 text-center text-[8px] uppercase tracking-tight md:text-[10px]",
-            isActive ? "font-black" : "font-semibold",
+            "relative z-10 mx-auto block w-full max-w-full truncate px-0.5 pb-0.5 text-center text-[8px] uppercase tracking-tight md:text-[10px] md:tracking-wide",
+            isActive ? "font-black md:font-bold" : "font-semibold",
           )}
           style={{
             color: isActive ? iconColor : (headerFontColor || "#111111"),
@@ -122,11 +129,13 @@ function CategoryNavColumn({
           {cat.name}
         </span>
       </div>
+
+      {/* Mobile: curved active tab stroke */}
       {isActive && (
         <motion.svg
-          layoutId="active-category-curve"
+          layoutId="active-category-curve-mobile"
           aria-hidden
-          className="pointer-events-none absolute bottom-0 left-0 right-0 z-[6] h-[22px] w-full overflow-visible"
+          className="pointer-events-none absolute bottom-0 left-0 right-0 z-[6] h-[22px] w-full overflow-visible md:hidden"
           viewBox="0 0 100 20"
           preserveAspectRatio="none"
           shapeRendering="geometricPrecision"
@@ -143,6 +152,19 @@ function CategoryNavColumn({
           />
         </motion.svg>
       )}
+
+      {/* Desktop: short centered underline */}
+      {isActive && (
+        <motion.span
+          layoutId="active-category-underline-desktop"
+          aria-hidden
+          className="pointer-events-none absolute bottom-0 left-1/2 z-[6] hidden h-[3px] w-9 -translate-x-1/2 rounded-full md:block"
+          style={{ backgroundColor: categoryAccent }}
+          transition={{
+            layout: { type: "spring", stiffness: 520, damping: 36, mass: 0.5 },
+          }}
+        />
+      )}
     </motion.div>
   );
 }
@@ -153,7 +175,6 @@ const MainLocationHeader = ({
   onCategorySelect,
 }) => {
   const { scrollY } = useScroll();
-  const [isLocationOpen, setIsLocationOpen] = useState(false);
   const [cartAnimData, setCartAnimData] = useState(null);
 
   // Dynamically load shopping-cart Lottie on mount
@@ -162,8 +183,12 @@ const MainLocationHeader = ({
       .then((m) => setCartAnimData(m.default))
       .catch(() => {});
   }, []);
-  const { currentLocation, refreshLocation, isFetchingLocation } =
+  const { currentLocation, isFetchingLocation, openLocationPicker } =
     useLocation();
+  const locationLabel = isFetchingLocation
+    ? "Detecting location..."
+    : currentLocation?.name || "Select location";
+  const locationTime = currentLocation?.time || "—";
   const { isOpen: isProductDetailOpen } = useProductDetail();
   const { settings } = useSettings();
   const appName = settings?.appName || "App";
@@ -372,25 +397,21 @@ const MainLocationHeader = ({
                     className="text-[11px] font-bold uppercase tracking-wider leading-none"
                     style={{ color: headerFontColor }}
                   >
-                    {currentLocation.time}
+                    {locationTime}
                   </span>
                 </div>
                 <button
                   type="button"
                   data-lenis-prevent
                   data-lenis-prevent-touch
-                  onClick={() => {
-                    setIsLocationOpen(true);
-                  }}
+                  onClick={openLocationPicker}
                   className="flex items-center gap-1 text-slate-900 hover:text-slate-700 cursor-pointer group active:scale-95 transition-all border-0 bg-transparent p-0 text-left">
                   <LocationOnIcon sx={{ fontSize: 14, color: "inherit" }} />
                   <div 
                     className="text-[13px] font-bold leading-tight max-w-[250px] lg:max-w-[320px] truncate"
                     style={{ color: headerFontColor }}
                   >
-                    {isFetchingLocation
-                      ? "Detecting location..."
-                      : currentLocation.name}
+                    {locationLabel}
                   </div>
                   <ChevronDownIcon
                     sx={{ fontSize: 12, opacity: 0.5, color: headerFontColor }}
@@ -507,25 +528,21 @@ const MainLocationHeader = ({
                       className="text-base font-bold tracking-tight leading-none"
                       style={{ color: headerFontColor }}
                     >
-                      {currentLocation.time}
+                      {locationTime}
                     </span>
                   </div>
                   <button
                     type="button"
                     data-lenis-prevent
                     data-lenis-prevent-touch
-                    onClick={() => {
-                      setIsLocationOpen(true);
-                    }}
+                    onClick={openLocationPicker}
                     className="flex items-center gap-1 text-slate-800 cursor-pointer group active:scale-95 transition-transform border-0 bg-transparent p-0 text-left">
                     <LocationOnIcon sx={{ fontSize: 14, color: headerFontColor }} />
                     <div 
                       className="text-[10px] font-medium leading-tight max-w-[280px] truncate"
                       style={{ color: headerFontColor }}
                     >
-                      {isFetchingLocation
-                        ? "Detecting location..."
-                        : currentLocation.name}
+                      {locationLabel}
                     </div>
                     <ChevronDownIcon
                       sx={{ fontSize: 12, opacity: 0.5, color: headerFontColor }}
@@ -574,8 +591,9 @@ const MainLocationHeader = ({
                 marginTop: categorySpacing,
                 display: displayNav,
                 overflowY: "hidden",
+                borderBottomColor: categoryAccent,
               }}
-              className="relative flex w-full items-end justify-between gap-0 z-10 pt-1 min-h-[68px] md:min-h-[76px] pb-0.5 px-0">
+              className="relative flex w-full items-end justify-between gap-0 z-10 pt-1 min-h-[68px] md:min-h-[76px] pb-0.5 px-0 md:border-b-2">
               {categories.slice(0, 10).map((cat) => {
                 const isActive = activeCategory?.id === cat.id;
                 return (
@@ -597,11 +615,7 @@ const MainLocationHeader = ({
           <div className="absolute top-0 right-0 w-80 h-80 bg-white/5 rounded-full blur-[100px] -mr-40 -mt-40 pointer-events-none" />
         </motion.div>
       </div>
-
-      <LocationDrawer
-        isOpen={isLocationOpen}
-        onClose={() => setIsLocationOpen(false)}
-      />
+      {/* Location picker lives in LocationGate (CustomerLayout) */}
     </>
   );
 };

@@ -8,6 +8,9 @@ import {
   getParcelHistory,
   trackParcel,
   cancelParcelByCustomer,
+  requestParcelLateRefund,
+  adminApproveParcelLateRefund,
+  adminRejectParcelLateRefund,
   adminGetParcels,
   adminAssignRider,
   adminGetPricingConfig,
@@ -36,6 +39,13 @@ import {
   adminUpdateCourierCompany,
   adminDeleteCourierCompany,
 } from "../controller/courierCompanyController.js";
+import {
+  submitParcelReview,
+  getMyParcelReview,
+  listPublicParcelReviews,
+  adminListParcelReviews,
+  adminUpdateParcelReviewStatus,
+} from "../controller/parcelReviewController.js";
 
 const router = express.Router();
 
@@ -49,6 +59,10 @@ router.get("/booking-config", verifyToken, getBookingConfig);
 router.get("/history", verifyToken, getParcelHistory);
 router.get("/track/:id", verifyToken, trackParcel);
 router.post("/cancel/:parcelId", verifyToken, cancelParcelByCustomer);
+router.post("/:parcelId/late-refund-request", verifyToken, requestParcelLateRefund);
+router.get("/reviews", verifyToken, listPublicParcelReviews);
+router.get("/review/:parcelId", verifyToken, getMyParcelReview);
+router.post("/review", verifyToken, submitParcelReview);
 
 /* ==========================================================================
    ADMIN API ROUTES
@@ -66,6 +80,18 @@ router.post(
   adminResetAllParcelData,
 );
 router.get("/admin/riders", verifyToken, allowRoles("admin", "parcel_admin"), adminGetRiders);
+router.put(
+  "/admin/late-refund/:parcelId/approve",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminApproveParcelLateRefund,
+);
+router.put(
+  "/admin/late-refund/:parcelId/reject",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminRejectParcelLateRefund,
+);
 router.get(
   "/admin/couriers",
   verifyToken,
@@ -89,6 +115,18 @@ router.delete(
   verifyToken,
   allowRoles("admin", "parcel_admin"),
   adminDeleteCourierCompany,
+);
+router.get(
+  "/admin/reviews",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminListParcelReviews,
+);
+router.put(
+  "/admin/reviews/:id",
+  verifyToken,
+  allowRoles("admin", "parcel_admin"),
+  adminUpdateParcelReviewStatus,
 );
 
 /* ==========================================================================

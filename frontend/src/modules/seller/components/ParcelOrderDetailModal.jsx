@@ -269,10 +269,6 @@ const ParcelOrderDetailModal = ({ parcel: initialParcel, onClose, onUpdated }) =
             </h3>
             <div className="rounded-2xl border border-slate-100 p-4 space-y-1">
               <DetailRow label="Pickup Window" value={parcel.pickupWindow || "—"} />
-              <DetailRow
-                label="Preferred Pickup"
-                value={formatDate(parcel.preferredPickupDate)}
-              />
               <DetailRow label="Booked At" value={formatDate(parcel.createdAt)} />
               <DetailRow
                 label="Distance"

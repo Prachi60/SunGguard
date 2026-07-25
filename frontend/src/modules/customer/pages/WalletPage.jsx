@@ -25,26 +25,15 @@ const WalletPage = () => {
         const fetchData = async () => {
             setLoading(true);
             try {
-                const [profileRes, ordersRes] = await Promise.all([
+                const [profileRes, txRes] = await Promise.all([
                     customerApi.getProfile(),
-                    customerApi.getMyOrders(),
+                    customerApi.getWalletTransactions({ limit: 50 }),
                 ]);
                 const profile = profileRes.data?.result ?? profileRes.data?.data ?? profileRes.data;
-                const rawOrders = ordersRes.data?.results ?? ordersRes.data?.result ?? [];
-                const orders = Array.isArray(rawOrders) ? rawOrders : [];
                 setBalance(profile?.walletBalance ?? 0);
-                // Only orders purchased using wallet
-                const walletOrders = orders.filter(
-                    (o) => (o.payment?.method || '').toLowerCase() === 'wallet'
-                );
-                const items = walletOrders.map((o) => ({
-                    _id: o._id,
-                    type: 'debit',
-                    title: 'Order Payment',
-                    amount: o.pricing?.total ?? o.payableAmount ?? 0,
-                    date: o.createdAt,
-                    orderId: o.orderId,
-                }));
+
+                const payload = txRes.data?.result ?? txRes.data?.data ?? {};
+                const items = Array.isArray(payload.items) ? payload.items : [];
                 setTransactions(items);
             } catch (err) {
                 console.error('Wallet fetch error:', err);
@@ -75,7 +64,7 @@ const WalletPage = () => {
                     <h2 className="text-3xl font-semibold text-slate-900 mt-1">
                         {loading ? '...' : `₹${(balance || 0).toLocaleString('en-IN')}`}
                     </h2>
-                    <p className="text-xs text-slate-500 mt-1">Return refunds are credited here</p>
+                    <p className="text-xs text-slate-500 mt-1">Refunds and wallet payments show in history below</p>
                 </div>
 
                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -90,28 +79,31 @@ const WalletPage = () => {
                         </div>
                     ) : transactions.length === 0 ? (
                         <div className="py-12 flex flex-col items-center justify-center text-center px-6">
-                            <p className="text-sm font-semibold text-slate-500 mb-1">No wallet payments yet</p>
+                            <p className="text-sm font-semibold text-slate-500 mb-1">No wallet activity yet</p>
                             <p className="text-xs text-slate-400">
-                                Orders paid using wallet will appear here.
+                                Credits (refunds) and wallet payments will appear here.
                             </p>
                         </div>
                     ) : (
                         <div className="divide-y divide-slate-100">
                             {transactions.map((tx) => (
                                 <div key={tx._id} className="px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${tx.type === 'credit' ? 'bg-brand-50 text-brand-600' : 'bg-slate-100 text-slate-700'}`}>
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${tx.type === 'credit' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-700'}`}>
                                             {tx.type === 'credit' ? <ArrowDownLeft size={19} /> : <ArrowUpRight size={19} />}
                                         </div>
-                                        <div>
-                                            <h4 className="font-semibold text-slate-800 text-sm">{tx.title}</h4>
+                                        <div className="min-w-0">
+                                            <h4 className="font-semibold text-slate-800 text-sm truncate">{tx.title}</h4>
                                             <p className="text-[11px] text-slate-500">{formatDate(tx.date)}</p>
                                             {tx.orderId && (
                                                 <p className="text-[10px] text-slate-500">#{tx.orderId}</p>
                                             )}
+                                            {!tx.orderId && tx.reference ? (
+                                                <p className="text-[10px] text-slate-400 truncate">{tx.reference}</p>
+                                            ) : null}
                                         </div>
                                     </div>
-                                    <div className={`text-sm font-semibold ${tx.type === 'credit' ? 'text-brand-600' : 'text-slate-900'}`}>
+                                    <div className={`text-sm font-semibold shrink-0 ml-3 ${tx.type === 'credit' ? 'text-emerald-600' : 'text-slate-900'}`}>
                                         {tx.type === 'credit' ? '+' : '-'}₹{(tx.amount || 0).toLocaleString('en-IN')}
                                     </div>
                                 </div>

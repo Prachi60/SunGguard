@@ -33,6 +33,15 @@ import {
 } from "../services/parcelRazorpayService.js";
 import { findNearestParcelSellerWithDistance } from "../services/sellerNearbyService.js";
 import { applyParcelDeliveredRiderEarning } from "../services/parcelRiderSettlementService.js";
+import {
+  canCustomerRequestLateRefund,
+  creditLateRefundToCustomerWallet,
+  getParcelLatePickupSummary,
+  getParcelPickupDeadline,
+  isNormalParcelPickupLate,
+  NORMAL_PICKUP_SLA_MINUTES,
+} from "../services/parcelLateRefundService.js";
+import { roundCurrency } from "../utils/money.js";
 
 function isParcelCod(parcelOrMethod) {
   const method =
@@ -554,7 +563,22 @@ export const trackParcel = async (req, res) => {
       return handleResponse(res, 404, "Parcel not found");
     }
 
-    return handleResponse(res, 200, "Parcel details retrieved successfully", parcel);
+    const plain = parcel.toObject ? parcel.toObject() : { ...parcel };
+    const deadline = getParcelPickupDeadline(plain);
+    const lateEligible = canCustomerRequestLateRefund(plain);
+    const lateSummary = getParcelLatePickupSummary(plain);
+    plain.pickupSla = {
+      minutes: String(plain.deliverySpeed || "normal").toLowerCase() === "express" ? 10 : NORMAL_PICKUP_SLA_MINUTES,
+      deadlineAt: deadline,
+      isLate: isNormalParcelPickupLate(plain),
+      canRequestLateRefund: lateEligible.ok === true,
+      lateRefundBlockReason: lateEligible.ok ? null : lateEligible.message,
+      lateByMinutes: lateSummary?.lateByMinutes ?? 0,
+      lateByLabel: lateSummary?.lateByLabel || null,
+      acceptedAt: plain.acceptedAt || null,
+    };
+
+    return handleResponse(res, 200, "Parcel details retrieved successfully", plain);
   } catch (error) {
     return handleResponse(res, 500, error.message);
   }
@@ -651,9 +675,206 @@ export const adminGetParcels = async (req, res) => {
       .populate("deliveryPartnerId", "name phone vehicleType")
       .sort({ createdAt: -1 });
 
-    return handleResponse(res, 200, "Parcels retrieved successfully", parcels);
+    const enriched = parcels.map((doc) => {
+      const plain = doc.toObject ? doc.toObject() : { ...doc };
+      const lateSummary = getParcelLatePickupSummary(plain);
+      if (lateSummary) {
+        plain.pickupSla = {
+          minutes: lateSummary.slaMinutes,
+          deadlineAt: lateSummary.deadlineAt,
+          acceptedAt: lateSummary.acceptedAt,
+          isLate: lateSummary.isLate,
+          lateByMinutes: lateSummary.lateByMinutes,
+          lateByLabel: lateSummary.lateByLabel,
+          stillAwaitingPickup: lateSummary.stillAwaitingPickup,
+        };
+      }
+      return plain;
+    });
+
+    return handleResponse(res, 200, "Parcels retrieved successfully", enriched);
   } catch (error) {
     return handleResponse(res, 500, error.message);
+  }
+};
+
+/** Customer: request wallet compensation when Normal pickup exceeds 30 min. */
+export const requestParcelLateRefund = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    const reason = String(req.body?.reason || "").trim().slice(0, 500);
+
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+    if (String(parcel.customerId) !== String(req.user.id)) {
+      return handleResponse(res, 403, "You are not authorized for this parcel");
+    }
+
+    const gate = canCustomerRequestLateRefund(parcel);
+    if (!gate.ok) {
+      return handleResponse(res, 409, gate.message);
+    }
+
+    const fare = roundCurrency(Number(parcel.fare) || 0);
+    const lateSummary = getParcelLatePickupSummary(parcel);
+    parcel.lateRefundRequest = {
+      status: "requested",
+      reason,
+      requestedAt: new Date(),
+      requestedAmount: fare,
+      measuredAt: lateSummary?.measuredAt || new Date(),
+      deadlineAt: lateSummary?.deadlineAt || null,
+      lateByMinutes: lateSummary?.lateByMinutes || 0,
+      lateByLabel: lateSummary?.lateByLabel || "",
+      approvedAmount: 0,
+      approvedAt: null,
+      approvedBy: null,
+      rejectedAt: null,
+      rejectedBy: null,
+      adminNote: "",
+    };
+    await parcel.save();
+
+    emitToAdmins("parcel:late-refund:requested", {
+      parcelId: String(parcel._id),
+      fare,
+      customerId: String(parcel.customerId),
+      reason,
+      lateByMinutes: lateSummary?.lateByMinutes || 0,
+      lateByLabel: lateSummary?.lateByLabel || "",
+    });
+
+    await sendParcelNotification(
+      parcel.customerId,
+      "customer",
+      "Late refund request submitted",
+      "Your late pickup refund request was sent to admin. COD / fare collection is unchanged until admin decides.",
+      NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE,
+      parcel._id,
+    );
+
+    return handleResponse(res, 200, "Late refund request submitted", parcel);
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+/** Admin: approve late refund → credit customer wallet (COD still collects full cash). */
+export const adminApproveParcelLateRefund = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+    if (String(parcel.lateRefundRequest?.status || "none") !== "requested") {
+      return handleResponse(res, 400, "No pending late refund request for this parcel");
+    }
+
+    const fare = roundCurrency(Number(parcel.fare) || 0);
+    let amount = roundCurrency(
+      req.body?.amount != null ? Number(req.body.amount) : fare,
+    );
+    if (!(amount > 0)) {
+      return handleResponse(res, 400, "Refund amount must be greater than 0");
+    }
+    if (fare > 0 && amount > fare) {
+      amount = fare;
+    }
+
+    const credited = await creditLateRefundToCustomerWallet(
+      parcel,
+      amount,
+      req.user.id,
+    );
+
+    parcel.lateRefundRequest.status = "approved";
+    parcel.lateRefundRequest.approvedAmount = credited;
+    parcel.lateRefundRequest.approvedAt = new Date();
+    parcel.lateRefundRequest.approvedBy = req.user.id;
+    parcel.lateRefundRequest.adminNote = String(req.body?.note || "").trim().slice(0, 500);
+    parcel.markModified("lateRefundRequest");
+    await parcel.save();
+
+    // COD: do NOT change collectAmount — rider still collects full cash.
+    emitToCustomer(parcel.customerId, {
+      event: "parcel:status:update",
+      payload: {
+        parcelId: String(parcel._id),
+        status: parcel.status,
+        parcel,
+        lateRefundApproved: true,
+        lateRefundAmount: credited,
+      },
+    });
+
+    await sendParcelNotification(
+      parcel.customerId,
+      "customer",
+      "Late refund approved",
+      `₹${credited.toFixed(2)} was credited to your wallet for late Normal pickup. ${
+        String(parcel.paymentMethod).toUpperCase() === "COD"
+          ? "COD cash collection remains the full fare."
+          : ""
+      }`.trim(),
+      NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE,
+      parcel._id,
+    );
+
+    return handleResponse(
+      res,
+      200,
+      "Late refund approved and credited to customer wallet",
+      parcel,
+    );
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
+  }
+};
+
+export const adminRejectParcelLateRefund = async (req, res) => {
+  try {
+    const { parcelId } = req.params;
+    const parcel = await Parcel.findById(parcelId);
+    if (!parcel) {
+      return handleResponse(res, 404, "Parcel not found");
+    }
+    if (String(parcel.lateRefundRequest?.status || "none") !== "requested") {
+      return handleResponse(res, 400, "No pending late refund request for this parcel");
+    }
+
+    parcel.lateRefundRequest.status = "rejected";
+    parcel.lateRefundRequest.rejectedAt = new Date();
+    parcel.lateRefundRequest.rejectedBy = req.user.id;
+    parcel.lateRefundRequest.adminNote = String(req.body?.note || "").trim().slice(0, 500);
+    parcel.markModified("lateRefundRequest");
+    await parcel.save();
+
+    emitToCustomer(parcel.customerId, {
+      event: "parcel:status:update",
+      payload: {
+        parcelId: String(parcel._id),
+        status: parcel.status,
+        parcel,
+        lateRefundRejected: true,
+      },
+    });
+
+    await sendParcelNotification(
+      parcel.customerId,
+      "customer",
+      "Late refund request rejected",
+      parcel.lateRefundRequest.adminNote ||
+        "Your late pickup refund request was rejected by admin.",
+      NOTIFICATION_EVENTS.PARCEL_STATUS_UPDATE,
+      parcel._id,
+    );
+
+    return handleResponse(res, 200, "Late refund request rejected", parcel);
+  } catch (error) {
+    return handleResponse(res, error.statusCode || 500, error.message);
   }
 };
 

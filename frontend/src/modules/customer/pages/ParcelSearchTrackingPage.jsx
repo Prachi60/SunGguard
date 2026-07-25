@@ -7,6 +7,7 @@ import { parcelApi } from "../services/parcelApi";
 import { getOrderSocket, onParcelStatusUpdate } from "@/core/services/orderSocket";
 import { createSocketTokenReader } from "@core/utils/authStorage";
 import { STORAGE_KEYS } from "@core/utils/storage";
+import ParcelReviewPrompt from "../components/parcel/ParcelReviewPrompt";
 
 const getCustomerToken = createSocketTokenReader(STORAGE_KEYS.AUTH_CUSTOMER);
 const MAP_LIBRARIES = ["places"];
@@ -111,6 +112,7 @@ const ParcelSearchTrackingPage = () => {
   const [parcel, setParcel] = useState(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [requestingLateRefund, setRequestingLateRefund] = useState(false);
   const [sliderIndex, setSliderIndex] = useState(0);
   const [directions, setDirections] = useState(null);
   const [routeDistanceM, setRouteDistanceM] = useState(null);
@@ -179,15 +181,10 @@ const ParcelSearchTrackingPage = () => {
     return onParcelStatusUpdate(getToken, (payload) => {
       const payloadId = payload?.parcelId || payload?.parcel?._id;
       if (!payloadId || String(payloadId) !== String(id)) return;
-      if (payload?.parcel) {
-        setParcel(payload.parcel);
-        return;
-      }
-      if (payload?.status) {
-        setParcel((prev) => (prev ? { ...prev, status: payload.status } : prev));
-      }
+      // Always refresh so pickupSla / lateRefundRequest stay accurate.
+      loadParcel(true);
     });
-  }, [id]);
+  }, [id, loadParcel]);
 
   const pickupPoint = useMemo(
     () => addressToLatLng(parcel?.pickupAddress),
@@ -324,6 +321,27 @@ const ParcelSearchTrackingPage = () => {
       toast.error(error.response?.data?.message || "Unable to cancel search");
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleRequestLateRefund = async () => {
+    if (!parcel?._id || requestingLateRefund) return;
+    setRequestingLateRefund(true);
+    try {
+      const response = await parcelApi.requestLateRefund(parcel._id, {
+        reason: "Normal pickup exceeded 30 minutes",
+      });
+      if (response.data?.success) {
+        toast.success("Late refund request sent to admin");
+        setParcel(response.data.result);
+        loadParcel(true);
+      } else {
+        toast.error(response.data?.message || "Unable to request refund");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to request refund");
+    } finally {
+      setRequestingLateRefund(false);
     }
   };
 
@@ -549,6 +567,60 @@ const ParcelSearchTrackingPage = () => {
                     Share this OTP only with your delivery captain when they collect the parcel.
                   </p>
                 </div>
+              )}
+
+              {(parcel.pickupSla?.canRequestLateRefund ||
+                parcel.lateRefundRequest?.status === "requested" ||
+                parcel.lateRefundRequest?.status === "approved" ||
+                parcel.lateRefundRequest?.status === "rejected") && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3.5 space-y-2">
+                  <p className="text-[10px] uppercase font-black tracking-[0.2em] text-amber-800">
+                    Late pickup (Normal 30 min)
+                  </p>
+                  {parcel.lateRefundRequest?.status === "requested" && (
+                    <p className="text-xs text-amber-900 font-semibold">
+                      Refund request is pending admin review. COD / fare collection stays unchanged until then.
+                    </p>
+                  )}
+                  {parcel.lateRefundRequest?.status === "approved" && (
+                    <p className="text-xs text-emerald-800 font-semibold">
+                      Admin credited ₹{Number(parcel.lateRefundRequest.approvedAmount || 0).toFixed(2)} to your wallet.
+                      {String(parcel.paymentMethod).toUpperCase() === "COD"
+                        ? " Full COD cash was still collected."
+                        : ""}
+                    </p>
+                  )}
+                  {parcel.lateRefundRequest?.status === "rejected" && (
+                    <p className="text-xs text-slate-700 font-semibold">
+                      Late refund request was rejected
+                      {parcel.lateRefundRequest.adminNote
+                        ? `: ${parcel.lateRefundRequest.adminNote}`
+                        : "."}
+                    </p>
+                  )}
+                  {parcel.pickupSla?.canRequestLateRefund && (
+                    <>
+                      <p className="text-xs text-amber-900 font-medium leading-snug">
+                        Captain took longer than 30 minutes. You can ask admin for a wallet refund.
+                        {String(parcel.paymentMethod).toUpperCase() === "COD"
+                          ? " COD cash is still collected in full."
+                          : ""}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={requestingLateRefund}
+                        onClick={handleRequestLateRefund}
+                        className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black uppercase tracking-wider disabled:opacity-60"
+                      >
+                        {requestingLateRefund ? "Submitting..." : "Request late refund"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {parcel.status === "DELIVERED" && (
+                <ParcelReviewPrompt parcelId={parcel._id || parcel.id} />
               )}
             </div>
           )}

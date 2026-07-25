@@ -1,5 +1,6 @@
 import Parcel from "../models/parcel.js";
 import ParcelConfig from "../models/parcelConfig.js";
+import ParcelReview from "../models/parcelReview.js";
 import Notification from "../models/notification.js";
 import Delivery from "../models/delivery.js";
 import { NOTIFICATION_EVENTS } from "../modules/notifications/notification.constants.js";
@@ -21,8 +22,9 @@ const PARCEL_NOTIFICATION_TYPES = [
 export async function resetAllParcelData() {
   cancelAllParcelSearchTimers();
 
-  const [parcelDelete, notificationDelete] = await Promise.all([
+  const [parcelDelete, reviewDelete, notificationDelete] = await Promise.all([
     Parcel.deleteMany({}),
+    ParcelReview.deleteMany({}),
     Notification.deleteMany({
       $or: [
         { type: { $in: PARCEL_NOTIFICATION_TYPES } },
@@ -44,6 +46,7 @@ export async function resetAllParcelData() {
 
   return {
     parcelsDeleted: parcelDelete.deletedCount || 0,
+    reviewsDeleted: reviewDelete.deletedCount || 0,
     notificationsDeleted: notificationDelete.deletedCount || 0,
     pricingReset: true,
     ridersResynced: busyRiders.length,

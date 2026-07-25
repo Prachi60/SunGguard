@@ -109,13 +109,19 @@ const Withdrawals = () => {
             </div>
 
             <div className="p-6 space-y-6 max-w-lg mx-auto">
-                {/* Balance Card */}
-                <div className="bg-[#0066FF] p-6 rounded-2xl text-white shadow-xl shadow-brand-500/20 relative overflow-hidden border border-brand-400/20">
+                {/* Balance Card — same navy brand gradient as Wallet earnings card */}
+                <div
+                    className="p-6 rounded-2xl text-white shadow-xl relative overflow-hidden"
+                    style={{
+                        background:
+                            "linear-gradient(to bottom right, var(--brand-900), var(--brand-600))",
+                    }}
+                >
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-3xl"></div>
-                    <div className="absolute bottom-0 left-0 w-24 h-24 bg-black/5 rounded-full -ml-12 -mb-12 blur-2xl"></div>
+                    <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-12 -mb-12 blur-2xl"></div>
 
                     <div className="relative z-10">
-                        <p className="text-brand-100 text-xs font-bold uppercase tracking-wider mb-2 opacity-90">Available for Withdrawal</p>
+                        <p className="text-white/80 text-xs font-bold uppercase tracking-wider mb-2">Available for Withdrawal</p>
                         <h2 className="text-4xl font-extrabold flex items-baseline leading-none tracking-tight">
                             <span className="text-2xl mr-1 font-bold">₹</span>
                             {stats.availableBalance.toLocaleString()}

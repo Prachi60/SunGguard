@@ -216,6 +216,32 @@ const parcelSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    /**
+     * Customer late-pickup refund request (Normal 30-min SLA).
+     * COD still collects full cash; admin may credit wallet as compensation.
+     */
+    lateRefundRequest: {
+      status: {
+        type: String,
+        enum: ["none", "requested", "approved", "rejected"],
+        default: "none",
+        index: true,
+      },
+      reason: { type: String, default: "", trim: true },
+      requestedAt: { type: Date, default: null },
+      requestedAmount: { type: Number, default: 0 },
+      /** Snapshot: how late captain was when customer requested. */
+      measuredAt: { type: Date, default: null },
+      deadlineAt: { type: Date, default: null },
+      lateByMinutes: { type: Number, default: 0 },
+      lateByLabel: { type: String, default: "" },
+      approvedAmount: { type: Number, default: 0 },
+      approvedAt: { type: Date, default: null },
+      approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+      rejectedAt: { type: Date, default: null },
+      rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+      adminNote: { type: String, default: "", trim: true },
+    },
     otp: {
       type: String,
       required: true,

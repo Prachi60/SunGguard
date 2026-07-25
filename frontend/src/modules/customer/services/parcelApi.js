@@ -11,10 +11,19 @@ export const parcelApi = {
   getHistory: () => axiosInstance.get("/parcel/history"),
   trackParcel: (id) => axiosInstance.get(`/parcel/track/${id}`),
   cancelSearch: (parcelId) => axiosInstance.post(`/parcel/cancel/${parcelId}`),
+  requestLateRefund: (parcelId, data = {}) =>
+    axiosInstance.post(`/parcel/${parcelId}/late-refund-request`, data),
+  getReviews: (params) => axiosInstance.get("/parcel/reviews", { params }),
+  getMyReview: (parcelId) => axiosInstance.get(`/parcel/review/${parcelId}`),
+  submitReview: (data) => axiosInstance.post("/parcel/review", data),
 
   // Admin APIs
   adminGetParcels: () => axiosInstance.get("/parcel/admin/all"),
   adminAssignRider: (data) => axiosInstance.post("/parcel/admin/assign-rider", data),
+  adminApproveLateRefund: (parcelId, data = {}) =>
+    axiosInstance.put(`/parcel/admin/late-refund/${parcelId}/approve`, data),
+  adminRejectLateRefund: (parcelId, data = {}) =>
+    axiosInstance.put(`/parcel/admin/late-refund/${parcelId}/reject`, data),
   adminGetPricingConfig: () => axiosInstance.get("/parcel/admin/pricing"),
   adminUpdatePricingConfig: (data) => axiosInstance.put("/parcel/admin/pricing", data),
   adminGetReports: () => axiosInstance.get("/parcel/admin/reports"),
@@ -24,6 +33,9 @@ export const parcelApi = {
   adminCreateCourier: (data) => axiosInstance.post("/parcel/admin/couriers", data),
   adminUpdateCourier: (id, data) => axiosInstance.put(`/parcel/admin/couriers/${id}`, data),
   adminDeleteCourier: (id) => axiosInstance.delete(`/parcel/admin/couriers/${id}`),
+  adminGetReviews: (params) => axiosInstance.get("/parcel/admin/reviews", { params }),
+  adminUpdateReviewStatus: (id, data) =>
+    axiosInstance.put(`/parcel/admin/reviews/${id}`, data),
 
   // Rider/Delivery Partner APIs
   riderGetAssigned: (options = {}) =>

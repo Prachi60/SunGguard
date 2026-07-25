@@ -399,15 +399,23 @@ const SupportTickets = () => {
                                     <span className={cn("text-[9px] font-bold opacity-60", selectedTicket?.id === t.id ? "text-white" : "text-slate-400")}>{t.date}</span>
                                 </div>
                                 <h4 className="text-xs font-black truncate mb-1">{t.subject}</h4>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                     <div className={cn("p-1 rounded-md", selectedTicket?.id === t.id ? "bg-white/10" : "bg-slate-100")}>
-                                        {t.userType === 'Customer' && <HiOutlineUser className="h-3 w-3" />}
+                                        {(t.userType === 'Customer' || t.userType === 'User') && <HiOutlineUser className="h-3 w-3" />}
                                         {t.userType === 'Seller' && <HiOutlineBuildingStorefront className="h-3 w-3" />}
-                                        {t.userType === 'Rider' && <HiOutlineTruck className="h-3 w-3" />}
+                                        {(t.userType === 'Rider' || t.userType === 'Delivery') && <HiOutlineTruck className="h-3 w-3" />}
                                     </div>
                                     <span className={cn("text-[10px] font-bold", selectedTicket?.id === t.id ? "text-white/80" : "text-slate-500")}>
-                                        {t.user} • {t.userType}
+                                        {t.user} • {t.userType === 'User' ? 'Customer' : t.userType}
                                     </span>
+                                    {t.category && (
+                                        <span className={cn(
+                                            "text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full",
+                                            selectedTicket?.id === t.id ? "bg-white/15 text-white" : "bg-amber-50 text-amber-700"
+                                        )}>
+                                            {t.category}
+                                        </span>
+                                    )}
                                 </div>
                             </button>
                         ))}

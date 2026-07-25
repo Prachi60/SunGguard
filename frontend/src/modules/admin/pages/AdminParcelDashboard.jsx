@@ -21,6 +21,9 @@ import {
   Plus,
   Pencil,
   Trash2,
+  Star,
+  EyeOff,
+  Eye,
 } from "lucide-react";
 import { toast } from "sonner";
 import { parcelApi } from "../../customer/services/parcelApi";
@@ -168,11 +171,15 @@ const CourierLocationFields = ({ location, onFieldChange, onOpenMap }) => (
 
 const AdminParcelDashboard = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState("all"); // 'all', 'active', 'pricing', 'couriers', 'reports'
+  const [activeTab, setActiveTab] = useState("all"); // 'all', 'active', 'pricing', 'couriers', 'reports', 'reviews'
   const [loading, setLoading] = useState(false);
   const [parcels, setParcels] = useState([]);
   const [riders, setRiders] = useState([]);
   const [selectedParcel, setSelectedParcel] = useState(null);
+  const [lateRefundAmount, setLateRefundAmount] = useState("");
+  const [lateRefundSaving, setLateRefundSaving] = useState(false);
+  const [parcelReviews, setParcelReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(false);
   const [couriers, setCouriers] = useState([]);
   const [addCourierForm, setAddCourierForm] = useState({
     name: "",
@@ -293,6 +300,41 @@ const AdminParcelDashboard = () => {
     riderPayout: 0,
     adminCommission: 0,
   });
+
+  const fetchParcelReviews = useCallback(async () => {
+    try {
+      setReviewsLoading(true);
+      const res = await parcelApi.adminGetReviews({ limit: 100 });
+      if (res.data?.success) {
+        const payload = res.data.result || {};
+        setParcelReviews(Array.isArray(payload.items) ? payload.items : []);
+      }
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Failed to load reviews");
+    } finally {
+      setReviewsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "reviews") {
+      fetchParcelReviews();
+    }
+  }, [activeTab, fetchParcelReviews]);
+
+  const handleReviewStatus = async (id, status) => {
+    try {
+      const res = await parcelApi.adminUpdateReviewStatus(id, { status });
+      if (res.data?.success) {
+        toast.success(`Review ${status}`);
+        fetchParcelReviews();
+      } else {
+        toast.error(res.data?.message || "Failed to update review");
+      }
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Failed to update review");
+    }
+  };
 
   const fetchData = useCallback(async (isSilent = false, { refreshPricing = !isSilent } = {}) => {
     if (!isSilent) setLoading(true);
@@ -693,6 +735,7 @@ const AdminParcelDashboard = () => {
             { id: "active", label: "Active Deliveries", icon: Activity },
             { id: "pricing", label: "Parcel Settings", icon: Settings },
             { id: "couriers", label: "Couriers", icon: Building2 },
+            { id: "reviews", label: "Reviews", icon: Star },
             { id: "reports", label: "Revenue Reports", icon: TrendingUp },
           ].map((tab) => (
             <button
@@ -756,6 +799,18 @@ const AdminParcelDashboard = () => {
                             <div className="text-[10px] text-slate-400 mt-0.5">
                               {new Date(parcel.createdAt).toLocaleDateString()}
                             </div>
+                            {parcel.lateRefundRequest?.status === "requested" && (
+                              <span className="inline-flex mt-1 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                                Late refund
+                                {parcel.lateRefundRequest?.lateByLabel ||
+                                parcel.pickupSla?.lateByLabel
+                                  ? ` · ${
+                                      parcel.lateRefundRequest?.lateByLabel ||
+                                      parcel.pickupSla?.lateByLabel
+                                    }`
+                                  : ""}
+                              </span>
+                            )}
                           </td>
                           <td className="p-4 align-top">
                             <span className="font-bold text-slate-800 block">
@@ -1511,6 +1566,109 @@ const AdminParcelDashboard = () => {
             </div>
           )}
 
+          {/* TAB: CUSTOMER REVIEWS */}
+          {activeTab === "reviews" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black text-slate-800">Parcel Reviews</h2>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    Ratings submitted after completed parcel deliveries
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchParcelReviews}
+                  className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 text-slate-600 hover:bg-white"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {reviewsLoading ? (
+                <div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-sm text-slate-400">
+                  Loading reviews…
+                </div>
+              ) : parcelReviews.length === 0 ? (
+                <div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-sm text-slate-400">
+                  No parcel reviews yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {parcelReviews.map((review) => (
+                    <div
+                      key={review._id}
+                      className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm flex flex-col sm:flex-row sm:items-start gap-4 justify-between"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <div className="flex items-center gap-0.5">
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <Star
+                                key={n}
+                                size={14}
+                                className={
+                                  n <= Number(review.rating)
+                                    ? "fill-amber-400 text-amber-400"
+                                    : "text-slate-200"
+                                }
+                              />
+                            ))}
+                          </div>
+                          <span
+                            className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                              review.status === "approved"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {review.status}
+                          </span>
+                        </div>
+                        <p className="text-sm font-bold text-slate-800">
+                          {review.customerId?.name || "Customer"}
+                          {review.customerId?.phone ? (
+                            <span className="text-slate-400 font-medium"> · {review.customerId.phone}</span>
+                          ) : null}
+                        </p>
+                        <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                          {review.comment || "No written review"}
+                        </p>
+                        <p className="text-[11px] text-slate-400 font-semibold mt-2">
+                          {review.createdAt
+                            ? new Date(review.createdAt).toLocaleString("en-IN")
+                            : ""}
+                          {review.parcelId?._id
+                            ? ` · Parcel #${String(review.parcelId._id).slice(-6)}`
+                            : ""}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {review.status === "approved" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleReviewStatus(review._id, "hidden")}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 text-slate-600 hover:bg-slate-50"
+                          >
+                            <EyeOff size={14} /> Hide
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleReviewStatus(review._id, "approved")}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+                          >
+                            <Eye size={14} /> Publish
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* TAB 4: REVENUE REPORTS */}
           {activeTab === "reports" && (
             <div className="space-y-6">
@@ -1638,6 +1796,170 @@ const AdminParcelDashboard = () => {
 
             {/* Content - Scrollable */}
             <div className="p-6 overflow-y-auto overscroll-contain space-y-6 flex-1 modal-scroll-pad">
+              {selectedParcel.lateRefundRequest?.status === "requested" && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 space-y-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-800">
+                      Late pickup refund pending
+                    </p>
+                    <p className="text-sm text-amber-900 mt-1">
+                      Customer requested wallet compensation because Normal pickup exceeded 30 minutes.
+                      {String(selectedParcel.paymentMethod).toUpperCase() === "COD"
+                        ? " COD full cash collection stays as-is."
+                        : ""}
+                    </p>
+                    <div className="mt-3 rounded-xl bg-white/70 border border-amber-100 px-3 py-2.5 space-y-1">
+                      <p className="text-[10px] font-black uppercase tracking-wider text-amber-700">
+                        Delivery partner delay
+                      </p>
+                      <p className="text-lg font-black text-amber-950">
+                        {selectedParcel.lateRefundRequest?.lateByLabel ||
+                          selectedParcel.pickupSla?.lateByLabel ||
+                          "Late"}
+                      </p>
+                      <p className="text-[11px] text-amber-800/90 font-medium">
+                        SLA {selectedParcel.pickupSla?.minutes || 30} min from accept
+                        {selectedParcel.acceptedAt
+                          ? ` · accepted ${new Date(selectedParcel.acceptedAt).toLocaleString("en-IN", {
+                              day: "numeric",
+                              month: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}`
+                          : ""}
+                        {selectedParcel.lateRefundRequest?.deadlineAt ||
+                        selectedParcel.pickupSla?.deadlineAt
+                          ? ` · deadline ${new Date(
+                              selectedParcel.lateRefundRequest?.deadlineAt ||
+                                selectedParcel.pickupSla?.deadlineAt,
+                            ).toLocaleString("en-IN", {
+                              day: "numeric",
+                              month: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}`
+                          : ""}
+                      </p>
+                      {selectedParcel.deliveryPartnerId?.name ? (
+                        <p className="text-[11px] text-amber-900 font-semibold">
+                          Captain: {selectedParcel.deliveryPartnerId.name}
+                          {selectedParcel.deliveryPartnerId.phone
+                            ? ` · ${selectedParcel.deliveryPartnerId.phone}`
+                            : ""}
+                        </p>
+                      ) : null}
+                    </div>
+                    {selectedParcel.lateRefundRequest.reason ? (
+                      <p className="text-xs text-amber-700 mt-2">
+                        Reason: {selectedParcel.lateRefundRequest.reason}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold uppercase text-amber-700 tracking-wider">
+                        Wallet credit (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="0.01"
+                        value={lateRefundAmount}
+                        onChange={(e) => setLateRefundAmount(e.target.value)}
+                        placeholder={String(selectedParcel.fare || "")}
+                        className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={lateRefundSaving}
+                      onClick={async () => {
+                        setLateRefundSaving(true);
+                        try {
+                          const amount =
+                            lateRefundAmount === ""
+                              ? undefined
+                              : Number(lateRefundAmount);
+                          const res = await parcelApi.adminApproveLateRefund(
+                            selectedParcel._id,
+                            Number.isFinite(amount) ? { amount } : {},
+                          );
+                          if (res.data?.success) {
+                            toast.success("Refund credited to customer wallet");
+                            setSelectedParcel(res.data.result);
+                            setLateRefundAmount("");
+                            fetchData?.();
+                          } else {
+                            toast.error(res.data?.message || "Approve failed");
+                          }
+                        } catch (error) {
+                          toast.error(
+                            error.response?.data?.message || "Approve failed",
+                          );
+                        } finally {
+                          setLateRefundSaving(false);
+                        }
+                      }}
+                      className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {lateRefundSaving ? "Saving..." : "Approve → Wallet"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={lateRefundSaving}
+                      onClick={async () => {
+                        setLateRefundSaving(true);
+                        try {
+                          const res = await parcelApi.adminRejectLateRefund(
+                            selectedParcel._id,
+                            {},
+                          );
+                          if (res.data?.success) {
+                            toast.success("Late refund request rejected");
+                            setSelectedParcel(res.data.result);
+                            fetchData?.();
+                          } else {
+                            toast.error(res.data?.message || "Reject failed");
+                          }
+                        } catch (error) {
+                          toast.error(
+                            error.response?.data?.message || "Reject failed",
+                          );
+                        } finally {
+                          setLateRefundSaving(false);
+                        }
+                      }}
+                      className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-white border border-amber-200 text-slate-700 hover:bg-amber-100 disabled:opacity-60"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              )}
+              {selectedParcel.lateRefundRequest?.status === "approved" && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 font-semibold space-y-1">
+                  <p>
+                    Late refund approved: ₹
+                    {Number(selectedParcel.lateRefundRequest.approvedAmount || 0).toFixed(2)}{" "}
+                    credited to customer wallet.
+                  </p>
+                  {(selectedParcel.lateRefundRequest.lateByLabel ||
+                    selectedParcel.pickupSla?.lateByLabel) && (
+                    <p className="text-xs font-medium text-emerald-800">
+                      Partner was{" "}
+                      {selectedParcel.lateRefundRequest.lateByLabel ||
+                        selectedParcel.pickupSla?.lateByLabel}
+                      .
+                    </p>
+                  )}
+                </div>
+              )}
+              {selectedParcel.lateRefundRequest?.status === "rejected" && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 font-semibold">
+                  Late refund request was rejected.
+                </div>
+              )}
+
               {/* Grid details */}
               <div className="grid grid-cols-2 gap-4 text-xs">
                 <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-100">

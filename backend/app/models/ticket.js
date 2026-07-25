@@ -26,6 +26,32 @@ const ticketSchema = new mongoose.Schema(
             type: String,
             required: true,
         },
+        /** High-level reason so admin can filter complaints. */
+        category: {
+            type: String,
+            enum: [
+                "order",
+                "parcel",
+                "payment",
+                "delivery",
+                "product",
+                "refund",
+                "app",
+                "other",
+            ],
+            default: "other",
+            index: true,
+        },
+        relatedOrderId: {
+            type: String,
+            trim: true,
+            default: "",
+        },
+        relatedParcelId: {
+            type: String,
+            trim: true,
+            default: "",
+        },
         priority: {
             type: String,
             enum: ["low", "medium", "high"],
@@ -90,5 +116,6 @@ const ticketSchema = new mongoose.Schema(
 
 ticketSchema.index({ userId: 1, userType: 1, createdAt: -1 });
 ticketSchema.index({ status: 1, priority: 1 });
+ticketSchema.index({ category: 1, status: 1, createdAt: -1 });
 
 export default mongoose.model("Ticket", ticketSchema);

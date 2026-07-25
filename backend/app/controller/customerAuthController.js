@@ -1,5 +1,6 @@
 import Customer from "../models/customer.js";
 import Transaction from "../models/transaction.js";
+import LedgerEntry from "../models/ledgerEntry.js";
 import jwt from "jsonwebtoken";
 import handleResponse from "../utils/helper.js";
 import {
@@ -13,6 +14,12 @@ import {
     validateSchema,
     verifyOtpSchema,
 } from "../validation/customerAuthValidation.js";
+import {
+    LEDGER_DIRECTION,
+    LEDGER_STATUS,
+    OWNER_TYPE,
+} from "../constants/finance.js";
+import { getCustomerBalance } from "../services/finance/walletService.js";
 
 const generateToken = (customer) =>
     jwt.sign(
@@ -20,6 +27,24 @@ const generateToken = (customer) =>
         process.env.JWT_SECRET,
         { expiresIn: "7d" }
     );
+
+function ledgerTitle(entry) {
+    const type = String(entry?.type || "");
+    const desc = String(entry?.description || "").trim();
+    if (desc) return desc;
+    switch (type) {
+        case "WALLET_REFUND":
+            return "Wallet refund";
+        case "WALLET_PAYMENT":
+            return "Order payment (wallet)";
+        case "CANCELLATION_REVERSAL":
+            return "Cancel refund";
+        case "ADJUSTMENT":
+            return "Wallet adjustment";
+        default:
+            return type.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) || "Wallet transaction";
+    }
+}
 
 /* ===============================
    SIGNUP – Send OTP
@@ -96,7 +121,15 @@ export const getCustomerProfile = async (req, res) => {
         if (!customer) {
             return handleResponse(res, 404, "Customer not found");
         }
-        return handleResponse(res, 200, "Profile fetched successfully", customer);
+        let walletBalance = Number(customer.walletBalance) || 0;
+        try {
+            walletBalance = await getCustomerBalance(req.user.id);
+        } catch {
+            // keep Customer.walletBalance fallback
+        }
+        const payload = customer.toObject ? customer.toObject() : { ...customer };
+        payload.walletBalance = walletBalance;
+        return handleResponse(res, 200, "Profile fetched successfully", payload);
     } catch (error) {
         return handleResponse(res, 500, error.message);
     }
@@ -132,34 +165,72 @@ export const updateCustomerProfile = async (req, res) => {
 export const getCustomerTransactions = async (req, res) => {
     try {
         const customerId = req.user.id;
-        const { page = 1, limit = 20 } = req.query;
-        const skip = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(50, Math.max(1, parseInt(limit, 10)));
-        const perPage = Math.min(50, Math.max(1, parseInt(limit, 10)));
+        const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const perPage = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 40));
 
-        const [transactions, total] = await Promise.all([
+        const [ledgerRows, legacyRows] = await Promise.all([
+            LedgerEntry.find({
+                actorType: OWNER_TYPE.CUSTOMER,
+                actorId: customerId,
+                status: { $ne: LEDGER_STATUS.FAILED },
+            })
+                .sort({ createdAt: -1 })
+                .limit(100)
+                .lean(),
             Transaction.find({ user: customerId, userModel: "User" })
                 .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(perPage)
+                .limit(100)
                 .populate("order", "orderId")
                 .lean(),
-            Transaction.countDocuments({ user: customerId, userModel: "User" }),
         ]);
 
-        const items = transactions.map((t) => ({
-            _id: t._id,
-            type: t.type === "Refund" ? "credit" : "debit",
-            title: t.type === "Refund" ? "Refund" : t.type,
-            amount: Math.abs(t.amount),
+        const ledgerItems = (ledgerRows || []).map((t) => ({
+            _id: String(t._id),
+            type: t.direction === LEDGER_DIRECTION.DEBIT ? "debit" : "credit",
+            title: ledgerTitle(t),
+            amount: Math.abs(Number(t.amount) || 0),
             date: t.createdAt,
-            reference: t.reference,
-            orderId: t.order?.orderId,
+            reference: t.reference || t.transactionId || "",
+            orderId: null,
+            source: "ledger",
+            ledgerType: t.type,
         }));
+
+        const legacyItems = (legacyRows || []).map((t) => {
+            const typeStr = String(t.type || "").toLowerCase();
+            const isCredit =
+                typeStr === "refund" ||
+                typeStr.includes("refund") ||
+                typeStr.includes("credit");
+            return {
+                _id: `legacy-${String(t._id)}`,
+                type: isCredit ? "credit" : "debit",
+                title: t.type === "Refund" ? "Refund" : t.type || "Transaction",
+                amount: Math.abs(Number(t.amount) || 0),
+                date: t.createdAt,
+                reference: t.reference || "",
+                orderId: t.order?.orderId || null,
+                source: "legacy",
+            };
+        });
+
+        // Prefer ledger; drop legacy rows that share the same reference as a ledger entry.
+        const ledgerRefs = new Set(
+            ledgerItems.map((i) => String(i.reference || "")).filter(Boolean),
+        );
+        const merged = [
+            ...ledgerItems,
+            ...legacyItems.filter((i) => !i.reference || !ledgerRefs.has(String(i.reference))),
+        ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        const total = merged.length;
+        const skip = (pageNum - 1) * perPage;
+        const items = merged.slice(skip, skip + perPage);
 
         return handleResponse(res, 200, "Transactions fetched", {
             items,
             total,
-            page: parseInt(page, 10),
+            page: pageNum,
             totalPages: Math.ceil(total / perPage) || 1,
         });
     } catch (error) {

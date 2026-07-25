@@ -23,6 +23,7 @@ import MapPicker from '../../../shared/components/MapPicker';
 import { composeCourierFullAddress } from '../../admin/utils/courierLocation';
 import { useAuth } from '@core/context/AuthContext';
 import { openParcelRazorpayCheckout } from '../utils/parcelRazorpay';
+import ParcelReviewsSection from '../components/parcel/ParcelReviewsSection';
 
 const FALLBACK_COURIER_COMPANIES = [
   { id: '', name: 'Blue Dart', platformCharge: 0, companyCharge: 0 },
@@ -877,7 +878,7 @@ const ParcelDeliveryPage = () => {
   return (
     <div className="container mx-auto max-w-4xl px-4 py-6 font-outfit mt-4">
       {/* Header section */}
-      <div className="bg-gradient-to-r from-primary to-blue-600 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8">
+      <div className="bg-gradient-to-r from-primary to-blue-600 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-4">
         <button
           onClick={() => navigate('/')}
           className="flex items-center gap-1.5 text-white/85 hover:text-white font-bold text-xs mb-4 transition-all hover:-translate-x-1"
@@ -893,6 +894,10 @@ const ParcelDeliveryPage = () => {
         <p className="text-white/80 font-medium text-sm md:text-base mt-2 max-w-lg">
           Send documents, keys, food, or electronics instantly across the city. Smooth, secure, and fully tracked.
         </p>
+      </div>
+
+      <div className="mb-8">
+        <ParcelReviewsSection />
       </div>
 
       {/* Main Content Area */}

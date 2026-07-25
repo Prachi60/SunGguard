@@ -14,19 +14,51 @@ async function getAdminIds() {
 // Create a new ticket (Customer/Seller/Rider)
 export const createTicket = async (req, res) => {
     try {
-        const { subject, description, priority, userType, mediaUrl, mediaType, mimeType } = req.body;
+        const {
+            subject,
+            description,
+            priority,
+            userType,
+            category,
+            relatedOrderId,
+            relatedParcelId,
+            mediaUrl,
+            mediaType,
+            mimeType,
+        } = req.body;
         const userId = req.user.id; // From verifyToken middleware
 
         const safeMediaUrl = String(mediaUrl || "").trim();
         const safeMediaType = String(mediaType || "").trim();
         const safeMimeType = String(mimeType || "").trim();
+        const allowedCategories = [
+            "order",
+            "parcel",
+            "payment",
+            "delivery",
+            "product",
+            "refund",
+            "app",
+            "other",
+        ];
+        const safeCategory = allowedCategories.includes(String(category || "").toLowerCase())
+            ? String(category).toLowerCase()
+            : "other";
+
+        // Canonical customer model name is "User" (legacy "Customer" still accepted by schema).
+        const rawType = String(userType || "User").trim();
+        const normalizedUserType =
+            rawType === "Customer" || rawType === "User" ? "User" : rawType;
 
         const newTicket = new Ticket({
             userId,
-            userType: userType || "Customer",
-            subject,
-            description,
-            priority,
+            userType: normalizedUserType,
+            subject: String(subject || "").trim(),
+            description: String(description || "").trim(),
+            category: safeCategory,
+            relatedOrderId: String(relatedOrderId || "").trim(),
+            relatedParcelId: String(relatedParcelId || "").trim(),
+            priority: ["low", "medium", "high"].includes(priority) ? priority : "medium",
             messages: [
                 {
                     sender: req.user.name || "User",
@@ -58,13 +90,14 @@ export const createTicket = async (req, res) => {
                 messageText: description || (safeMediaUrl ? "Sent an image" : ""),
                 data: {
                     subject,
+                    category: safeCategory,
                 },
             });
         } catch {
             // Push notifications are best-effort; never block ticket creation.
         }
 
-        return handleResponse(res, 201, "Ticket created successfully", newTicket);
+        return handleResponse(res, 201, "Complaint submitted successfully", newTicket);
     } catch (error) {
         return handleResponse(res, 500, error.message);
     }

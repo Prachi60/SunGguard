@@ -10,6 +10,20 @@ export const createTicketSchema = Joi.object({
   subject: trimmedString.min(2).max(200).required(),
   description: trimmedString.min(2).max(5000).required(),
   priority: trimmedString.valid("low", "medium", "high", "urgent").optional(),
+  category: trimmedString
+    .valid(
+      "order",
+      "parcel",
+      "payment",
+      "delivery",
+      "product",
+      "refund",
+      "app",
+      "other",
+    )
+    .optional(),
+  relatedOrderId: trimmedString.max(80).allow("", null).optional(),
+  relatedParcelId: trimmedString.max(80).allow("", null).optional(),
   userType: trimmedString
     .valid("Customer", "Seller", "Delivery", "User")
     .optional(),
